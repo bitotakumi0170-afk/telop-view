@@ -1,0 +1,48 @@
+{
+ "total": 3.0,
+ "stage": "DL",
+ "stages": [
+  {
+   "name": "DL",
+   "pct": 11.8,
+   "weight": 25
+  },
+  {
+   "name": "Demucs",
+   "pct": 0.0,
+   "weight": 10
+  },
+  {
+   "name": "whisper",
+   "pct": 0.0,
+   "weight": 30
+  },
+  {
+   "name": "第0稿",
+   "pct": 0.0,
+   "weight": 5
+  },
+  {
+   "name": "画面検出",
+   "pct": 0.0,
+   "weight": 10
+  },
+  {
+   "name": "カットXML",
+   "pct": 0.0,
+   "weight": 3
+  },
+  {
+   "name": "ロビー精査",
+   "pct": 0.0,
+   "weight": 12
+  },
+  {
+   "name": "演出",
+   "pct": 0.0,
+   "weight": 5
+  }
+ ],
+ "note": "",
+ "updated": "2026-07-25 15:41"
+}
