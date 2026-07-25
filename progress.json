@@ -1,15 +1,15 @@
 {
- "total": 2.6,
- "stage": "DL",
+ "total": 25.5,
+ "stage": "Demucs",
  "stages": [
   {
    "name": "DL",
-   "pct": 10.5,
+   "pct": 100,
    "weight": 25
   },
   {
    "name": "Demucs",
-   "pct": 0.0,
+   "pct": 5,
    "weight": 10
   },
   {
@@ -44,5 +44,5 @@
   }
  ],
  "note": "",
- "updated": "2026-07-26 05:43"
+ "updated": "2026-07-26 05:50"
 }
