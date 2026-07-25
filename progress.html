@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>テロップ工程 進捗</title>
+<style>
+:root { --bg:#0f1117; --card:#1a1d27; --tx:#e8eaf0; --sub:#8b90a0; --acc:#4ade80; --bar:#2a2e3d; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--tx); font-family:"Hiragino Sans","Yu Gothic UI",sans-serif;
+       min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+.card { background:var(--card); border-radius:16px; padding:32px 28px; width:100%; max-width:520px; }
+h1 { font-size:15px; color:var(--sub); font-weight:600; margin-bottom:24px; letter-spacing:.05em; }
+.gauge-wrap { position:relative; width:200px; height:200px; margin:0 auto 8px; }
+svg { transform:rotate(-90deg); }
+.gauge-bg { fill:none; stroke:var(--bar); stroke-width:14; }
+.gauge-fg { fill:none; stroke:var(--acc); stroke-width:14; stroke-linecap:round;
+            transition:stroke-dashoffset .8s ease; }
+.gauge-num { position:absolute; inset:0; display:flex; flex-direction:column;
+             align-items:center; justify-content:center; }
+.gauge-num b { font-size:44px; font-weight:700; }
+.gauge-num span { font-size:12px; color:var(--sub); margin-top:2px; }
+.stage-now { text-align:center; font-size:15px; margin-bottom:4px; }
+.note { text-align:center; font-size:12px; color:var(--sub); min-height:18px; margin-bottom:20px; }
+.stages { display:flex; flex-direction:column; gap:10px; }
+.st { display:grid; grid-template-columns:88px 1fr 42px; gap:10px; align-items:center; font-size:13px; }
+.st .nm { color:var(--sub); }
+.st.done .nm { color:var(--tx); }
+.bar { height:8px; background:var(--bar); border-radius:4px; overflow:hidden; }
+.bar i { display:block; height:100%; background:var(--acc); border-radius:4px;
+         transition:width .8s ease; }
+.st .pc { text-align:right; color:var(--sub); font-variant-numeric:tabular-nums; }
+.upd { text-align:center; font-size:11px; color:var(--sub); margin-top:22px; }
+.err { text-align:center; color:#f87171; font-size:13px; margin-top:12px; display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+<h1>テロップ工程 進捗</h1>
+<div class="gauge-wrap">
+<svg width="200" height="200" viewBox="0 0 200 200">
+<circle class="gauge-bg" cx="100" cy="100" r="86"/>
+<circle class="gauge-fg" id="fg" cx="100" cy="100" r="86" stroke-dasharray="540.35" stroke-dashoffset="540.35"/>
+</svg>
+<div class="gauge-num"><b id="num">--</b><span>%</span></div>
+</div>
+<div class="stage-now" id="stage">読み込み中…</div>
+<div class="note" id="note"></div>
+<div class="stages" id="stages"></div>
+<div class="upd" id="upd"></div>
+<div class="err" id="err">progress.json が読めません（更新待ちの可能性）</div>
+</div>
+<script>
+const C = 540.35;
+async function load() {
+  try {
+    const r = await fetch("progress.json?t=" + Date.now(), {cache:"no-store"});
+    if (!r.ok) throw 0;
+    const d = await r.json();
+    document.getElementById("err").style.display = "none";
+    document.getElementById("num").textContent = Math.round(d.total);
+    document.getElementById("fg").style.strokeDashoffset = C * (1 - d.total/100);
+    document.getElementById("stage").textContent =
+      d.total >= 100 ? "✅ 全工程完了" : "現在: " + d.stage;
+    document.getElementById("note").textContent = d.note || "";
+    document.getElementById("stages").innerHTML = d.stages.map(s =>
+      `<div class="st${s.pct>=100?" done":""}">
+       <span class="nm">${s.pct>=100?"✔ ":""}${s.name}</span>
+       <span class="bar"><i style="width:${s.pct}%"></i></span>
+       <span class="pc">${Math.round(s.pct)}%</span></div>`).join("");
+    document.getElementById("upd").textContent =
+      "データ更新: " + d.updated + "（このページは1分ごとに自動再読込）";
+  } catch(e) {
+    document.getElementById("err").style.display = "block";
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
