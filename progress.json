@@ -1,6 +1,6 @@
 {
- "total": 35.0,
- "stage": "whisper",
+ "total": 65.0,
+ "stage": "第0稿",
  "stages": [
   {
    "name": "DL",
@@ -9,12 +9,12 @@
   },
   {
    "name": "Demucs",
-   "pct": 100.0,
+   "pct": 100,
    "weight": 10
   },
   {
    "name": "whisper",
-   "pct": 0.0,
+   "pct": 100,
    "weight": 30
   },
   {
@@ -44,5 +44,5 @@
   }
  ],
  "note": "",
- "updated": "2026-07-25 15:53"
+ "updated": "2026-07-25 15:59"
 }
