@@ -1253,8 +1253,8 @@ function seekOne(v,t,stId){
   const go=()=>{ v.currentTime=Math.max(0,t); v.play(); };
   if(v.readyState>=1) go(); else v.addEventListener('loadedmetadata',go,{once:true});
 }
-function seek1(t1){ v4.pause(); seekOne(v1,t1-2,'st1'); document.getElementById('tc1').textContent='('+fmt(t1)+')'; window.scrollTo({top:0,behavior:'smooth'}); }
-function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById('tc4').textContent='('+fmt(t4)+')'; window.scrollTo({top:0,behavior:'smooth'}); }
+function seek1(t1){ v4.pause(); seekOne(v1,t1-2,'st1'); document.getElementById('tc1').textContent='('+fmt(t1)+')'; }
+function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById('tc4').textContent='('+fmt(t4)+')'; }
 </script>
 <div class="item"><div class="head"><span class="badge" style="background:#1a7f37">✅ 反映</span>
 <button class="jump" onclick="seek1(0)">▶初稿</button><button class="jump j2" onclick="seek4(2.2)">▶第2稿</button>
