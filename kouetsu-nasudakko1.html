@@ -18,7 +18,81 @@ h1{font-size:20px;margin:12px 0 4px} .sum{font-size:16px;margin:4px 0 8px}
 #docs{margin:10px 0} #docs details{background:#fff;border:1px solid #d0d7de;border-radius:8px;padding:10px 14px;margin-bottom:8px}
 #docs summary{cursor:pointer;font-size:14px;font-weight:bold}
 #txtbody{max-height:60vh;overflow:auto;font-size:13px;background:#f6f8fa;padding:10px;border-radius:6px;white-space:pre-wrap}
+
+#fbside{position:fixed;left:0;top:0;bottom:0;width:320px;overflow-y:auto;background:#fff;border-right:2px solid #d0d7de;padding:14px 14px 40px;z-index:40;font-size:13px;line-height:1.7;display:none}
+body.fbon #fbside{display:block}
+body.fbon{margin-left:348px}
+#fbside h3{font-size:14px;margin:0 0 8px}
+.fbrow{display:flex;gap:6px;align-items:flex-start;padding:3px 0;border-bottom:1px dashed #eaeef2}
+.fbrow input{margin-top:3px;flex-shrink:0;width:15px;height:15px}
+.fbrow.done span.tx{color:#8b949e;text-decoration:line-through}
+.fbhead{font-weight:bold;background:#f6f8fa;padding:4px 6px;margin:8px -6px 2px;border-radius:4px}
+.fbtc{color:#0969da;font-weight:bold;cursor:pointer;text-decoration:underline}
+#fbtoggle{position:fixed;left:10px;bottom:10px;z-index:50;background:#0969da;color:#fff;border:none;border-radius:20px;padding:8px 14px;font-size:13px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+@media(max-width:900px){ body.fbon{margin-left:0} body.fbon #fbside{width:85%;box-shadow:4px 0 12px rgba(0,0,0,.3)} }
 </style>
+<div id="fbside"><h3>📋 クライアント修正指示（原文ママ）</h3><small style="color:#57606a">秒数タップで動画がジャンプ・チェックはこのブラウザに保存されます</small>
+<div class="fbhead">ナスダッ子① FB</div>
+<div class="fbhead">秒数 担当 修正済 映像 参考URLや補足等</div>
+<label class="fbrow" id="fbr0"><input type="checkbox" onchange="fbck(this,0)"><span class="tx">ONに一貫性がなく、アヴァンで何を見せたいのか分からなかったので整理お願いします。</span></label>
+<label class="fbrow" id="fbr1"><input type="checkbox" onchange="fbck(this,1)"><span class="tx">途中で資産チャートを出さないと理解できない箇所が多々あります</span></label>
+<label class="fbrow" id="fbr2"><input type="checkbox" onchange="fbck(this,2)"><span class="tx">全体的にルーズが多いので、２画面加工を増やす</span></label>
+<label class="fbrow" id="fbr3"><input type="checkbox" onchange="fbck(this,3)"><span class="tx">何の話をしているのか、理解できないシーンが多々あります。</span></label>
+<label class="fbrow" id="fbr4"><input type="checkbox" onchange="fbck(this,4)"><span class="tx"><a class="fbtc" onclick="seek1(65)">1:05</a> ナスダッ子さんのプロフィールを紹介します。をカット。すぐにプロフィールへ</span></label>
+<label class="fbrow" id="fbr5"><input type="checkbox" onchange="fbck(this,5)"><span class="tx"><a class="fbtc" onclick="seek1(79)">1:19</a> 繋ぎが急です</span></label>
+<label class="fbrow" id="fbr6"><input type="checkbox" onchange="fbck(this,6)"><span class="tx"><a class="fbtc" onclick="seek1(83)">1:23</a> ONの繋ぎが気持ち悪いです</span></label>
+<label class="fbrow" id="fbr7"><input type="checkbox" onchange="fbck(this,7)"><span class="tx"><a class="fbtc" onclick="seek1(200)">3:20</a> 前段が長いので、30年分見て予想の話をカット</span></label>
+<label class="fbrow" id="fbr8"><input type="checkbox" onchange="fbck(this,8)"><span class="tx"><a class="fbtc" onclick="seek1(272)">4:32</a> すぐにテロップを。その前の間をカット</span></label>
+<label class="fbrow" id="fbr9"><input type="checkbox" onchange="fbck(this,9)"><span class="tx"><a class="fbtc" onclick="seek1(285)">4:45</a> 同じこと２回言うので短く</span></label>
+<label class="fbrow" id="fbr10"><input type="checkbox" onchange="fbck(this,10)"><span class="tx"><a class="fbtc" onclick="seek1(289)">4:49</a></span></label>
+<label class="fbrow" id="fbr11"><input type="checkbox" onchange="fbck(this,11)"><span class="tx">ネットから拾ったデータで、しかも画質の悪いものなので絶対に使わないでください。</span></label>
+<label class="fbrow" id="fbr12"><input type="checkbox" onchange="fbck(this,12)"><span class="tx">背景も、これを使わないと何度もお伝えしています。</span></label>
+<label class="fbrow" id="fbr13"><input type="checkbox" onchange="fbck(this,13)"><span class="tx"><a class="fbtc" onclick="seek1(367)">6:07</a> 先ほど言った　カット。話していない</span></label>
+<label class="fbrow" id="fbr14"><input type="checkbox" onchange="fbck(this,14)"><span class="tx">30年で増えた額を話してから、投資額を言っているので、内容が理解できない</span></label>
+<label class="fbrow" id="fbr15"><input type="checkbox" onchange="fbck(this,15)"><span class="tx"><a class="fbtc" onclick="seek1(431)">7:11</a> これはダヴィンチの写真で間違い無いですか？</span></label>
+<label class="fbrow" id="fbr16"><input type="checkbox" onchange="fbck(this,16)"><span class="tx"><a class="fbtc" onclick="seek1(676)">11:16</a> ここから何の話か理解できないです</span></label>
+<label class="fbrow" id="fbr17"><input type="checkbox" onchange="fbck(this,17)"><span class="tx"><a class="fbtc" onclick="seek1(1037)">17:17</a> フリップに書いてもらっていて、全く見せないのは失礼です</span></label>
+<label class="fbrow" id="fbr18"><input type="checkbox" onchange="fbck(this,18)"><span class="tx"><a class="fbtc" onclick="seek1(1100)">18:20</a> Finvizのイメージ入れる</span></label>
+<div class="fbhead">テロップ</div>
+<label class="fbrow" id="fbr19"><input type="checkbox" onchange="fbck(this,19)"><span class="tx"><a class="fbtc" onclick="seek1(0)">0:00</a> まで　を小さく</span></label>
+<label class="fbrow" id="fbr20"><input type="checkbox" onchange="fbck(this,20)"><span class="tx"><a class="fbtc" onclick="seek1(83)">1:23</a></span></label>
+<label class="fbrow" id="fbr21"><input type="checkbox" onchange="fbck(this,21)"><span class="tx">こちらの　カット</span></label>
+<label class="fbrow" id="fbr22"><input type="checkbox" onchange="fbck(this,22)"><span class="tx">帯　本を出したのは少し前ですし、それが言いたいわけではない</span></label>
+<label class="fbrow" id="fbr23"><input type="checkbox" onchange="fbck(this,23)"><span class="tx"><a class="fbtc" onclick="seek1(92)">1:32</a> 発売日　カット</span></label>
+<label class="fbrow" id="fbr24"><input type="checkbox" onchange="fbck(this,24)"><span class="tx"><a class="fbtc" onclick="seek1(122)">2:02</a> 行間をくっつかない程度に</span></label>
+<label class="fbrow" id="fbr25"><input type="checkbox" onchange="fbck(this,25)"><span class="tx"><a class="fbtc" onclick="seek1(141)">2:21</a></span></label>
+<label class="fbrow" id="fbr26"><input type="checkbox" onchange="fbck(this,26)"><span class="tx">試行錯誤し　に。</span></label>
+<label class="fbrow" id="fbr27"><input type="checkbox" onchange="fbck(this,27)"><span class="tx">大変な失敗　以外は強調なし</span></label>
+<label class="fbrow" id="fbr28"><input type="checkbox" onchange="fbck(this,28)"><span class="tx"><a class="fbtc" onclick="seek1(148)">2:28</a> 帯　タイミングも変ですし、内容も雑です</span></label>
+<label class="fbrow" id="fbr29"><input type="checkbox" onchange="fbck(this,29)"><span class="tx"><a class="fbtc" onclick="seek1(235)">3:55</a></span></label>
+<label class="fbrow" id="fbr30"><input type="checkbox" onchange="fbck(this,30)"><span class="tx">ベスト1000→世界ランキング</span></label>
+<label class="fbrow" id="fbr31"><input type="checkbox" onchange="fbck(this,31)"><span class="tx">1000は不自然でおそらくベスト選か10ですが不明なので、</span></label>
+<label class="fbrow" id="fbr32"><input type="checkbox" onchange="fbck(this,32)"><span class="tx"><a class="fbtc" onclick="seek1(242)">4:02</a> 投資の本　→投資本</span></label>
+<label class="fbrow" id="fbr33"><input type="checkbox" onchange="fbck(this,33)"><span class="tx"><a class="fbtc" onclick="seek1(247)">4:07</a> の人　カット</span></label>
+<label class="fbrow" id="fbr34"><input type="checkbox" onchange="fbck(this,34)"><span class="tx"><a class="fbtc" onclick="seek1(265)">4:25</a> チェンジ前にテロップが出ている</span></label>
+<label class="fbrow" id="fbr35"><input type="checkbox" onchange="fbck(this,35)"><span class="tx"><a class="fbtc" onclick="seek1(277)">4:37</a> 帯　知識0の主婦が資産4億円へ  失敗から学んだ投資人生</span></label>
+<label class="fbrow" id="fbr36"><input type="checkbox" onchange="fbck(this,36)"><span class="tx"><a class="fbtc" onclick="seek1(282)">4:42</a> いければ→いきます</span></label>
+<label class="fbrow" id="fbr37"><input type="checkbox" onchange="fbck(this,37)"><span class="tx"><a class="fbtc" onclick="seek1(299)">4:59</a> 図に入っていないテロップは入れる　他も同様</span></label>
+<label class="fbrow" id="fbr38"><input type="checkbox" onchange="fbck(this,38)"><span class="tx"><a class="fbtc" onclick="seek1(345)">5:45</a> 出し方が違う</span></label>
+<label class="fbrow" id="fbr39"><input type="checkbox" onchange="fbck(this,39)"><span class="tx"><a class="fbtc" onclick="seek1(377)">6:17</a> 赤ザブにして、サイズを大きく</span></label>
+<label class="fbrow" id="fbr40"><input type="checkbox" onchange="fbck(this,40)"><span class="tx"><a class="fbtc" onclick="seek1(431)">7:11</a> ダヴィンチ</span></label>
+<label class="fbrow" id="fbr41"><input type="checkbox" onchange="fbck(this,41)"><span class="tx"><a class="fbtc" onclick="seek1(660)">11:00</a> ずっと色変えなので、強調なのかわからない</span></label>
+<label class="fbrow" id="fbr42"><input type="checkbox" onchange="fbck(this,42)"><span class="tx"><a class="fbtc" onclick="seek1(907)">15:07</a> 出し方が違う</span></label>
+<label class="fbrow" id="fbr43"><input type="checkbox" onchange="fbck(this,43)"><span class="tx"><a class="fbtc" onclick="seek1(949)">15:49</a> ２行目サイド　他と同様に英語に</span></label>
+<label class="fbrow" id="fbr44"><input type="checkbox" onchange="fbck(this,44)"><span class="tx"><a class="fbtc" onclick="seek1(1017)">16:57</a> 帯　3選→3条件（取り切りも）</span></label>
+<label class="fbrow" id="fbr45"><input type="checkbox" onchange="fbck(this,45)"><span class="tx"><a class="fbtc" onclick="seek1(1057)">17:37</a> ２行目サイドの左のスペースが広い。他も同様</span></label>
+<label class="fbrow" id="fbr46"><input type="checkbox" onchange="fbck(this,46)"><span class="tx"><a class="fbtc" onclick="seek1(1155)">19:15</a> 事実→技術</span></label>
+<label class="fbrow" id="fbr47"><input type="checkbox" onchange="fbck(this,47)"><span class="tx"><a class="fbtc" onclick="seek1(1232)">20:32</a> センターに合わせる</span></label>
+<label class="fbrow" id="fbr48"><input type="checkbox" onchange="fbck(this,48)"><span class="tx"><a class="fbtc" onclick="seek1(1290)">21:30</a> 帯のタイミングがおかしい</span></label>
+<div class="fbhead">BGM・SE</div>
+<div class="fbhead">その他</div></div>
+<button id="fbtoggle" onclick="document.body.classList.toggle('fbon')">📋 FB指示</button>
+<script>
+const FBKEY="fbck_nasudakko1";
+function fbck(el,i){const st=JSON.parse(localStorage.getItem(FBKEY)||"{}");st[i]=el.checked;localStorage.setItem(FBKEY,JSON.stringify(st));document.getElementById("fbr"+i).classList.toggle("done",el.checked)}
+(function(){const st=JSON.parse(localStorage.getItem(FBKEY)||"{}");for(const i in st){const r=document.getElementById("fbr"+i);if(r&&st[i]){r.querySelector("input").checked=true;r.classList.add("done")}}
+if(window.innerWidth>1100)document.body.classList.add("fbon")})();
+</script>
 <h1>修正反映チェックレポート ナスダッ子①</h1>
 <div class="sum">✅ 23　⚠ 1　❌ 0　<small>▶ボタンで両動画が該当タイムへ飛びます（2秒手前から再生）</small></div>
 <div id="players">
