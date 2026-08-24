@@ -30,6 +30,10 @@ body.fbon{margin-left:348px}
 .fbtc{color:#0969da;font-weight:bold;cursor:pointer;text-decoration:underline}
 #fbtoggle{position:fixed;left:10px;bottom:10px;z-index:50;background:#0969da;color:#fff;border:none;border-radius:20px;padding:8px 14px;font-size:13px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.3)}
 @media(max-width:900px){ body.fbon{margin-left:0} body.fbon #fbside{width:85%;box-shadow:4px 0 12px rgba(0,0,0,.3)} }
+
+.item{position:relative}
+.item.done{opacity:.5}
+.ickbox{position:absolute;top:10px;right:10px;width:18px;height:18px;cursor:pointer}
 </style>
 <div id="fbside"><h3>📋 クライアント修正指示（原文ママ）</h3><small style="color:#57606a">秒数タップで動画がジャンプ・チェックはこのブラウザに保存されます</small>
 <div class="fbhead">ナスダッ子① FB</div>
@@ -1323,7 +1327,7 @@ function assign(files){
 drop.addEventListener('drop',e=>assign(e.dataTransfer.files));
 function fmt(t){t=Math.max(0,t);return Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0')}
 function seekOne(v,t,stId){
-  if(!v.src){ document.getElementById(stId).classList.add('need'); drop.scrollIntoView({behavior:'smooth'}); return; }
+  if(!v.src){ document.getElementById(stId).classList.add('need'); note('⚠ 先に上の欄で動画ファイルを読み込んでください'); return; }
   const go=()=>{ v.currentTime=Math.max(0,t); v.play(); };
   if(v.readyState>=1) go(); else v.addEventListener('loadedmetadata',go,{once:true});
 }
@@ -1468,3 +1472,17 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 <div class="item"><div class="head"><span class="badge" style="background:#cf222e">✂ カット</span> <button class="jump" onclick="seek1(365)">▶初稿</button><button class="jump j2" onclick="seek4(314.1)">▶第2稿</button> <b>初稿 6:05〜6:30</b>（25秒）→ 第2稿 5:14 で接続</div><div class="note">📋 FB該当指示: <span class="q">「6:07 先ほど言った　カット。話していない」</span><br><small>※テロップ⚠の「6:17 赤ザブにして、サイズを大きく」の対象セリフはこの区間ごとカットされています</small></div></div>
 <div class="item"><div class="head"><span class="badge" style="background:#cf222e">✂ カット</span> <button class="jump" onclick="seek1(627)">▶初稿</button><button class="jump j2" onclick="seek4(553.7)">▶第2稿</button> <b>初稿 10:27〜10:30</b>（3秒）→ 第2稿 9:14 で接続</div><div class="note"><small>対応するFB指示は見当たりません（制作側の判断カットの可能性）</small></div></div>
 <div class="item"><div class="head"><span class="badge" style="background:#cf222e">✂ カット</span> <button class="jump" onclick="seek1(678)">▶初稿</button><button class="jump j2" onclick="seek4(599.5)">▶第2稿</button> <b>初稿 11:18〜11:25</b>（7秒）→ 第2稿 9:59 で接続</div><div class="note">📋 FB該当指示: <span class="q">「11:16 ここから何の話か理解できないです」</span></div></div>
+
+<script>
+(function(){
+ const KEY="itemck_nasudakko1";
+ const st=JSON.parse(localStorage.getItem(KEY)||"{}");
+ document.querySelectorAll(".item").forEach((it,i)=>{
+   const cb=document.createElement("input");
+   cb.type="checkbox"; cb.className="ickbox"; cb.title="確認済みチェック";
+   if(st[i]){cb.checked=true; it.classList.add("done");}
+   cb.onchange=()=>{st[i]=cb.checked; localStorage.setItem(KEY,JSON.stringify(st)); it.classList.toggle("done",cb.checked);};
+   it.appendChild(cb);
+ });
+})();
+</script>
