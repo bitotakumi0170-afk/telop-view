@@ -114,7 +114,7 @@ if(window.innerWidth>1100)document.body.classList.add("fbon")})();
  <b>ここに 初稿と第2稿 の動画ファイル(MP4)をドラッグ＆ドロップ</b>（2本まとめてOK・修正指示PDFやテキストも落とせます）<br>
  <small>動画はこのPC内で再生されるだけで、どこにもアップロードされません</small><br>
  <label class="pick">ファイルを選ぶ<input type="file" accept="video/mp4,video/*" multiple hidden onchange="assign(this.files)"></label>
- <span id="st1" class="st">初稿: 未読込</span>　<span id="st4" class="st">第2稿: 未読込</span>
+ <span id="st1" class="st">初稿: 未読込</span>　<span id="st4" class="st">2稿: 未読込</span>
  <button class="pick" style="background:#57606a" onclick="swap();note('手動で入れ替えました')">⇄ 初稿/第2稿を入れ替え</button>
  <div id="vmsg"></div>
 </div>
@@ -1281,6 +1281,7 @@ Finvizの面積が拡大していっているセクターが
 const v1=document.getElementById('v1'), v4=document.getElementById('v4');
 const DUR1=1380.0, DUR4=1298.9, TOL=3.0;   // 初稿/第2稿の正しい尺(秒)
 let f1=null, f4=null;
+window.RL = ["初稿","2稿"];
 function durOk(d,exp){ return Math.abs(d-exp)<=TOL; }
 function verify(){
   if(!v1.src||!v4.src||!isFinite(v1.duration)||!isFinite(v4.duration)) return;
@@ -1295,8 +1296,8 @@ function note(t){ const n=document.getElementById('vmsg'); n.textContent=t; n.cl
 function swap(){
   const s1=v1.src, s4=v4.src; v1.src=s4; v4.src=s1;
   const a=f1; f1=f4; f4=a;
-  document.getElementById('st1').textContent='初稿: '+(f1?f1.name:'未読込');
-  document.getElementById('st4').textContent='第2稿: '+(f4?f4.name:'未読込');
+  document.getElementById('st1').textContent=RL[0]+': '+(f1?f1.name:'未読込');
+  document.getElementById('st4').textContent=RL[1]+': '+(f4?f4.name:'未読込');
   [ [v1,DUR1],[v4,DUR4] ].forEach(([v])=>v.load&&v.load());
 }
 const drop=document.getElementById('drop');
@@ -1320,13 +1321,13 @@ function assign(files){
     if(!a&&b) a=fs.find(f=>f!==b);
     if(a&&!b) b=fs.find(f=>f!==a);
     if(!a){[a,b]=fs;}
-    setVid(v1,a,'st1','初稿'); setVid(v4,b,'st4','第2稿');
+    setVid(v1,a,'st1',RL[0]); setVid(v4,b,'st4',RL[1]);
   } else {
     const f=fs[0];
-    if(isSecond(f.name)) setVid(v4,f,'st4','第2稿');
-    else if(isFirst(f.name)) setVid(v1,f,'st1','初稿');
-    else if(!v1.src) setVid(v1,f,'st1','初稿');
-    else setVid(v4,f,'st4','第2稿');
+    if(isSecond(f.name)) setVid(v4,f,'st4',RL[1]);
+    else if(isFirst(f.name)) setVid(v1,f,'st1',RL[0]);
+    else if(!v1.src) setVid(v1,f,'st1',RL[0]);
+    else setVid(v4,f,'st4',RL[1]);
   }
 }
 ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
@@ -1502,6 +1503,11 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    const L = {1:["初稿","2稿"],2:["2稿","3稿"],3:["3稿","最終稿"]}[n] || ["前稿","後稿"];
    const lbls = document.querySelectorAll("#players .lbl");
    if (lbls.length >= 2) { lbls[0].childNodes[0].nodeValue = L[0] + " "; lbls[1].childNodes[0].nodeValue = L[1] + " "; }
+   const prevL = window.RL; window.RL = L;
+   ["st1","st4"].forEach((id, k)=>{
+     const el = document.getElementById(id);
+     if (el && prevL) el.textContent = el.textContent.replace(prevL[k] + ":", L[k] + ":");
+   });
    localStorage.setItem("round_nasudakko1", n);
  };
  showRound(localStorage.getItem("round_nasudakko1") || "1");
