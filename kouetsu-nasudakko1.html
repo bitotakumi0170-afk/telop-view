@@ -1523,58 +1523,11 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 <div class="cap">04_第2稿.mp4（31142F / 23.976fps）を全フレーム走査し、周囲から浮いている数フレームを抽出しました。カット143点を検出。<b>演出と紛らわしい箇所も念のため出しています</b>ので、目視でご確認ください。</div>
 <div class="cap">数フレーム単位の異常は検出されませんでした。</div>
 
-<script id="matchbadge_js">
-(function(){
- const RA = [[0, 47], [59, 60], [64, 70], [80, 87], [92, 126], [135, 137], [140, 145], [176, 183], [189, 246], [254, 256], [264, 265], [281, 322], [345, 434], [547, 549], [563, 565], [567, 569], [577, 602], [618, 704], [706, 718], [744, 757], [822, 840], [869, 883], [903, 934], [940, 955], [966, 984], [995, 1015], [1032, 1054], [1099, 1109], [1216, 1220], [1228, 1237], [1310, 1312], [1317, 1318]];
- const RB = [[2.3, 49.3], [59.9, 60.9], [63.1, 69.1], [74.9, 81.9], [85.9, 119.9], [128.9, 130.9], [133.9, 138.9], [169.9, 176.9], [182.0, 239.0], [212.1, 214.1], [222.1, 223.1], [238.2, 279.2], [298.2, 387.2], [475.8, 477.8], [491.8, 493.8], [495.8, 497.8], [505.8, 530.8], [546.8, 632.8], [625.1, 637.1], [663.1, 676.1], [741.1, 759.1], [788.1, 802.1], [822.1, 853.1], [859.1, 874.1], [884.8, 902.8], [913.8, 933.8], [950.8, 972.8], [1017.8, 1027.8], [1134.8, 1138.8], [1146.8, 1155.8], [1228.8, 1230.8], [1235.8, 1236.8]];
- const players = document.getElementById("players");
- if (!players) return;
- const badge = document.createElement("div");
- badge.id = "matchbadge";
- badge.style.cssText = "position:absolute;left:50%;top:2px;transform:translateX(-50%);z-index:20;" +
-   "padding:3px 14px;border-radius:14px;font-size:13px;font-weight:bold;background:#8b949e;color:#fff;pointer-events:none";
- badge.textContent = "再生すると一致状況が出ます";
- players.style.position = "sticky";
- players.appendChild(badge);
- function inRanges(t, rs){ for (const [a,b] of rs) { if (t >= a && t < b) return true; } return false; }
- function setBadge(changed){
-   if (changed) { badge.style.background = "#fb8500"; badge.textContent = "🟠 変化あり（要確認）"; }
-   else { badge.style.background = "#1a7f37"; badge.textContent = "🟢 前回と一致（スルーOK）"; }
- }
- const cur = document.getElementById("diffcur");
- const DUR = 1380;
- function onTime(v, rs, isA){
-   if (v.paused && v.currentTime === 0) return;
-   setBadge(inRanges(v.currentTime, rs));
-   if (cur && isA) cur.style.left = Math.min(v.currentTime / DUR * 100, 100) + "%";
- }
- const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
- if (v1) v1.addEventListener("timeupdate", () => onTime(v1, RA, true));
- if (v4) v4.addEventListener("timeupdate", () => onTime(v4, RB, false));
-})();
-</script>
 
-<script id="collapse_js">
-(function(){
- // 🎬構成の変更 / 🔍フレーム点検 は見出しタップで開閉(既定は閉じて画面をすっきりさせる)
- document.querySelectorAll("h1").forEach(h => {
-   const t = h.textContent || "";
-   if (!(t.includes("構成の変更") || t.includes("フレーム単位の点検"))) return;
-   const nodes = [];
-   let n = h.nextElementSibling;
-   while (n && n.tagName !== "H1") { nodes.push(n); n = n.nextElementSibling; }
-   let open = false;
-   const base = h.textContent;
-   function render(){
-     nodes.forEach(x => x.style.display = open ? "" : "none");
-     h.textContent = (open ? "▾ " : "▸ ") + base + (open ? "" : "（タップで開く）");
-   }
-   h.style.cursor = "pointer";
-   h.addEventListener("click", () => { open = !open; render(); });
-   render();
- });
-})();
-</script>
+
+
+
+
 
 
 
@@ -1642,6 +1595,34 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    v.currentTime = Math.max(0, v.currentTime + step);
  });
 
+ // --- YouTube式: 画面の左右をダブルタップで±5秒 ---
+ [v1, v4].forEach(v => {
+   v.style.touchAction = "manipulation";   // iPhoneのダブルタップ拡大を抑止
+   function skip(x){
+     const r = v.getBoundingClientRect();
+     const step = (x - r.left) < r.width / 2 ? -5 : 5;
+     v.currentTime = Math.max(0, v.currentTime + step);
+     lastV = v;
+     const tag = document.createElement("div");
+     tag.textContent = step > 0 ? "+5秒 ⏩" : "⏪ -5秒";
+     tag.style.cssText = "position:absolute;top:40%;" + (step > 0 ? "right:8%" : "left:8%") +
+       ";background:rgba(0,0,0,.65);color:#fff;padding:6px 12px;border-radius:16px;" +
+       "font-size:14px;pointer-events:none;z-index:30";
+     const host = v.closest(".box") || v.parentElement;
+     host.style.position = "relative";
+     host.appendChild(tag);
+     setTimeout(() => tag.remove(), 500);
+   }
+   v.addEventListener("dblclick", e => { e.preventDefault(); skip(e.clientX); });
+   let lastTap = 0, lastX = 0;
+   v.addEventListener("touchend", e => {
+     const now = Date.now();
+     const x = (e.changedTouches[0] || {}).clientX || 0;
+     if (now - lastTap < 350 && Math.abs(x - lastX) < 60) { e.preventDefault(); skip(x); lastTap = 0; }
+     else { lastTap = now; lastX = x; }
+   });
+ });
+
  // --- ドライブ読み込み ---
  if (DRIVE) {
    const gurl = id => "https://drive-video-proxy.drive-proxy.workers.dev/d/" + id;
@@ -1654,5 +1635,58 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
      if (typeof note === "function") note("ドライブから読み込みました(再生開始まで数秒かかることがあります)");
    });
  }
+})();
+</script>
+
+<script id="matchbadge_js">
+(function(){
+ const RA = [[0, 47], [59, 60], [64, 70], [80, 87], [92, 126], [135, 137], [140, 145], [176, 183], [189, 246], [254, 256], [264, 265], [281, 322], [345, 434], [547, 549], [563, 565], [567, 569], [577, 602], [618, 704], [706, 718], [744, 757], [822, 840], [869, 883], [903, 934], [940, 955], [966, 984], [995, 1015], [1032, 1054], [1099, 1109], [1216, 1220], [1228, 1237], [1310, 1312], [1317, 1318]];
+ const RB = [[2.3, 49.3], [59.9, 60.9], [63.1, 69.1], [74.9, 81.9], [85.9, 119.9], [128.9, 130.9], [133.9, 138.9], [169.9, 176.9], [182.0, 239.0], [212.1, 214.1], [222.1, 223.1], [238.2, 279.2], [298.2, 387.2], [475.8, 477.8], [491.8, 493.8], [495.8, 497.8], [505.8, 530.8], [546.8, 632.8], [625.1, 637.1], [663.1, 676.1], [741.1, 759.1], [788.1, 802.1], [822.1, 853.1], [859.1, 874.1], [884.8, 902.8], [913.8, 933.8], [950.8, 972.8], [1017.8, 1027.8], [1134.8, 1138.8], [1146.8, 1155.8], [1228.8, 1230.8], [1235.8, 1236.8]];
+ const players = document.getElementById("players");
+ if (!players) return;
+ const badge = document.createElement("div");
+ badge.id = "matchbadge";
+ badge.style.cssText = "flex-basis:100%;text-align:center;margin-top:4px;" +
+   "padding:3px 14px;border-radius:14px;font-size:13px;font-weight:bold;background:#8b949e;color:#fff";
+ badge.textContent = "再生すると一致状況が出ます";
+ players.style.flexWrap = "wrap";
+ players.appendChild(badge);
+ function inRanges(t, rs){ for (const [a,b] of rs) { if (t >= a && t < b) return true; } return false; }
+ function setBadge(changed){
+   if (changed) { badge.style.background = "#fb8500"; badge.textContent = "🟠 変化あり（要確認）"; }
+   else { badge.style.background = "#1a7f37"; badge.textContent = "🟢 前回と一致（スルーOK）"; }
+ }
+ const cur = document.getElementById("diffcur");
+ const DUR = 1380;
+ function onTime(v, rs, isA){
+   if (v.paused && v.currentTime === 0) return;
+   setBadge(inRanges(v.currentTime, rs));
+   if (cur && isA) cur.style.left = Math.min(v.currentTime / DUR * 100, 100) + "%";
+ }
+ const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
+ if (v1) v1.addEventListener("timeupdate", () => onTime(v1, RA, true));
+ if (v4) v4.addEventListener("timeupdate", () => onTime(v4, RB, false));
+})();
+</script>
+
+<script id="collapse_js">
+(function(){
+ // 🎬構成の変更 / 🔍フレーム点検 は見出しタップで開閉(既定は閉じて画面をすっきりさせる)
+ document.querySelectorAll("h1").forEach(h => {
+   const t = h.textContent || "";
+   if (!(t.includes("構成の変更") || t.includes("フレーム単位の点検"))) return;
+   const nodes = [];
+   let n = h.nextElementSibling;
+   while (n && n.tagName !== "H1") { nodes.push(n); n = n.nextElementSibling; }
+   let open = false;
+   const base = h.textContent;
+   function render(){
+     nodes.forEach(x => x.style.display = open ? "" : "none");
+     h.textContent = (open ? "▾ " : "▸ ") + base + (open ? "" : "（タップで開く）");
+   }
+   h.style.cursor = "pointer";
+   h.addEventListener("click", () => { open = !open; render(); });
+   render();
+ });
 })();
 </script>
