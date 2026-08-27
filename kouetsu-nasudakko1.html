@@ -1578,6 +1578,8 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 
 
+
+
 <script id="player_tools_js">
 (function(){
  const FPS = 23.976;
@@ -1599,12 +1601,27 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  for (const r of [1, 2, 4, 8]) {
    html += '<button class="jump spd" data-r="' + r + '" style="background:' + (r === 1 ? "#0969da" : "#57606a") + '">' + r + 'x</button>';
  }
+ html += '<span style="color:#57606a;margin-left:8px">表示:</span>';
+ html += '<button class="jump vw" data-v="both" style="background:#0969da">両方</button>';
+ html += '<button class="jump vw" data-v="v1" style="background:#57606a">前稿のみ</button>';
+ html += '<button class="jump vw" data-v="v4" style="background:#57606a">後稿のみ</button>';
  html += '<span style="color:#8b949e;font-size:12px;margin-left:6px">PC: ←→=1フレーム / Shift+←→=10フレーム</span>';
  if (DRIVE) {
    html += '<button class="jump" id="drvbtn" style="background:#1a7f37">☁️ ドライブから動画を読み込む</button>';
  }
  bar.innerHTML = html;
  players.after(bar);
+
+ const box1 = v1.closest(".box"), box4 = v4.closest(".box");
+ bar.querySelectorAll(".vw").forEach(b => b.addEventListener("click", () => {
+   const m = b.dataset.v;
+   box1.style.display = (m === "v4") ? "none" : "";
+   box4.style.display = (m === "v1") ? "none" : "";
+   if (m === "v1") lastV = v1;
+   if (m === "v4") lastV = v4;
+   bar.querySelectorAll(".vw").forEach(x => x.style.background = "#57606a");
+   b.style.background = "#0969da";
+ }));
 
  bar.querySelectorAll(".spd").forEach(b => b.addEventListener("click", () => {
    const r = parseFloat(b.dataset.r);
