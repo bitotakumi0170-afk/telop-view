@@ -1465,8 +1465,7 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 <h1 style="font-size:18px;margin-top:28px">🎯 見るべき場所（前稿との変化マップ）</h1>
 <div class="cap"><b>全体の56%は前稿と一致（確認不要）</b>。オレンジの区間（計605秒・32箇所）だけご確認ください。
-再生中は動画の下に「🟢 前回と一致中 / 🟠 変化あり」が出ます。</div>
-<div onclick="const r=this.getBoundingClientRect();seek1((event.clientX-r.left)/r.width*1380)" style="position:relative;height:22px;background:#d8dee4;border-radius:4px;width:100%;cursor:pointer;margin:8px 0 6px"><div style="position:absolute;left:0.00%;width:3.41%;top:0;bottom:0;background:#fb8500" title="変化 0:00〜0:47"></div><div style="position:absolute;left:4.28%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 0:59〜1:00"></div><div style="position:absolute;left:4.64%;width:0.43%;top:0;bottom:0;background:#fb8500" title="変化 1:04〜1:10"></div><div style="position:absolute;left:5.80%;width:0.51%;top:0;bottom:0;background:#fb8500" title="変化 1:20〜1:27"></div><div style="position:absolute;left:6.67%;width:2.46%;top:0;bottom:0;background:#fb8500" title="変化 1:32〜2:06"></div><div style="position:absolute;left:9.78%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 2:15〜2:17"></div><div style="position:absolute;left:10.14%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 2:20〜2:25"></div><div style="position:absolute;left:12.75%;width:0.51%;top:0;bottom:0;background:#fb8500" title="変化 2:56〜3:03"></div><div style="position:absolute;left:13.70%;width:4.13%;top:0;bottom:0;background:#fb8500" title="変化 3:09〜4:06"></div><div style="position:absolute;left:18.41%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 4:14〜4:16"></div><div style="position:absolute;left:19.13%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 4:24〜4:25"></div><div style="position:absolute;left:20.36%;width:2.97%;top:0;bottom:0;background:#fb8500" title="変化 4:41〜5:22"></div><div style="position:absolute;left:25.00%;width:6.45%;top:0;bottom:0;background:#fb8500" title="変化 5:45〜7:14"></div><div style="position:absolute;left:39.64%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 9:07〜9:09"></div><div style="position:absolute;left:40.80%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 9:23〜9:25"></div><div style="position:absolute;left:41.09%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 9:27〜9:29"></div><div style="position:absolute;left:41.81%;width:1.81%;top:0;bottom:0;background:#fb8500" title="変化 9:37〜10:02"></div><div style="position:absolute;left:44.78%;width:6.23%;top:0;bottom:0;background:#fb8500" title="変化 10:18〜11:44"></div><div style="position:absolute;left:51.16%;width:0.87%;top:0;bottom:0;background:#fb8500" title="変化 11:46〜11:58"></div><div style="position:absolute;left:53.91%;width:0.94%;top:0;bottom:0;background:#fb8500" title="変化 12:24〜12:37"></div><div style="position:absolute;left:59.57%;width:1.30%;top:0;bottom:0;background:#fb8500" title="変化 13:42〜14:00"></div><div style="position:absolute;left:62.97%;width:1.01%;top:0;bottom:0;background:#fb8500" title="変化 14:29〜14:43"></div><div style="position:absolute;left:65.43%;width:2.25%;top:0;bottom:0;background:#fb8500" title="変化 15:03〜15:34"></div><div style="position:absolute;left:68.12%;width:1.09%;top:0;bottom:0;background:#fb8500" title="変化 15:40〜15:55"></div><div style="position:absolute;left:70.00%;width:1.30%;top:0;bottom:0;background:#fb8500" title="変化 16:06〜16:24"></div><div style="position:absolute;left:72.10%;width:1.45%;top:0;bottom:0;background:#fb8500" title="変化 16:35〜16:55"></div><div style="position:absolute;left:74.78%;width:1.59%;top:0;bottom:0;background:#fb8500" title="変化 17:12〜17:34"></div><div style="position:absolute;left:79.64%;width:0.72%;top:0;bottom:0;background:#fb8500" title="変化 18:19〜18:29"></div><div style="position:absolute;left:88.12%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 20:16〜20:20"></div><div style="position:absolute;left:88.99%;width:0.65%;top:0;bottom:0;background:#fb8500" title="変化 20:28〜20:37"></div><div style="position:absolute;left:94.93%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 21:50〜21:52"></div><div style="position:absolute;left:95.43%;width:0.40%;top:0;bottom:0;background:#fb8500" title="変化 21:57〜21:58"></div><div id="diffcur" style="position:absolute;top:-3px;bottom:-3px;width:2px;background:#0969da;left:0"></div></div>
+変化マップは<b>動画の下に常時表示</b>されています（灰=一致・橙=変化・タップでジャンプ）。</div>
 <details style="margin:4px 0 12px"><summary style="cursor:pointer;font-size:13px;color:#57606a">変化区間の一覧を開く（32箇所）</summary>
 <div style="display:flex;flex-wrap:wrap;gap:2px;margin-top:6px"><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(0);seek4(2.3)">▶ 0:00〜0:47（47秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(59);seek4(59.9)">▶ 0:59〜1:00（1秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(64);seek4(63.1)">▶ 1:04〜1:10（6秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(80);seek4(74.9)">▶ 1:20〜1:27（7秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(92);seek4(85.9)">▶ 1:32〜2:06（34秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(135);seek4(128.9)">▶ 2:15〜2:17（2秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(140);seek4(133.9)">▶ 2:20〜2:25（5秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(176);seek4(169.9)">▶ 2:56〜3:03（7秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(189);seek4(182.0)">▶ 3:09〜4:06（57秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(254);seek4(212.1)">▶ 4:14〜4:16（2秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(264);seek4(222.1)">▶ 4:24〜4:25（1秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(281);seek4(238.2)">▶ 4:41〜5:22（41秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(345);seek4(298.2)">▶ 5:45〜7:14（89秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(547);seek4(475.8)">▶ 9:07〜9:09（2秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(563);seek4(491.8)">▶ 9:23〜9:25（2秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(567);seek4(495.8)">▶ 9:27〜9:29（2秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(577);seek4(505.8)">▶ 9:37〜10:02（25秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(618);seek4(546.8)">▶ 10:18〜11:44（86秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(706);seek4(625.1)">▶ 11:46〜11:58（12秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(744);seek4(663.1)">▶ 12:24〜12:37（13秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(822);seek4(741.1)">▶ 13:42〜14:00（18秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(869);seek4(788.1)">▶ 14:29〜14:43（14秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(903);seek4(822.1)">▶ 15:03〜15:34（31秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(940);seek4(859.1)">▶ 15:40〜15:55（15秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(966);seek4(884.8)">▶ 16:06〜16:24（18秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(995);seek4(913.8)">▶ 16:35〜16:55（20秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(1032);seek4(950.8)">▶ 17:12〜17:34（22秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(1099);seek4(1017.8)">▶ 18:19〜18:29（10秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(1216);seek4(1134.8)">▶ 20:16〜20:20（4秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(1228);seek4(1146.8)">▶ 20:28〜20:37（9秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(1310);seek4(1228.8)">▶ 21:50〜21:52（2秒）</button><button class="jump" style="background:#fb8500;margin:2px" onclick="seek1(1317);seek4(1235.8)">▶ 21:57〜21:58（1秒）</button></div></details>
 <h1 style="font-size:18px;margin-top:28px">🎬 構成の変更（自動検出）</h1>
@@ -1638,6 +1637,10 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 })();
 </script>
 
+
+
+
+
 <script id="matchbadge_js">
 (function(){
  const RA = [[0, 47], [59, 60], [64, 70], [80, 87], [92, 126], [135, 137], [140, 145], [176, 183], [189, 246], [254, 256], [264, 265], [281, 322], [345, 434], [547, 549], [563, 565], [567, 569], [577, 602], [618, 704], [706, 718], [744, 757], [822, 840], [869, 883], [903, 934], [940, 955], [966, 984], [995, 1015], [1032, 1054], [1099, 1109], [1216, 1220], [1228, 1237], [1310, 1312], [1317, 1318]];
@@ -1651,17 +1654,56 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  badge.textContent = "再生すると一致状況が出ます";
  players.style.flexWrap = "wrap";
  players.appendChild(badge);
+
+ // --- 動画直下のシークバー(灰=一致/橙=変化・再生に連動・タップでジャンプ) ---
+ const AA = [45.0, 50.0, 55.0, 70.0, 85.0, 90.0, 95.0, 100.0, 105.0, 110.0, 115.0, 120.0, 125.0, 130.0, 135.0, 140.0, 145.0, 150.0, 155.0, 160.0, 165.0, 170.0, 175.0, 180.0, 185.0, 190.0, 235.0, 240.0, 245.0, 250.0, 255.0, 260.0, 265.0, 270.0, 275.0, 280.0, 295.0, 300.0, 305.0, 310.0, 315.0, 320.0, 325.0, 330.0, 335.0, 340.0, 345.0, 350.0, 355.0, 360.0, 390.0, 395.0, 400.0, 405.0, 410.0, 415.0, 420.0, 425.0, 430.0, 435.0, 440.0, 445.0, 450.0, 455.0, 460.0, 465.0, 470.0, 475.0, 480.0, 485.0, 490.0, 495.0, 500.0, 505.0, 510.0, 515.0, 520.0, 525.0, 530.0, 535.0, 540.0, 545.0, 550.0, 555.0, 560.0, 565.0, 570.0, 575.0, 580.0, 585.0, 590.0, 595.0, 600.0, 605.0, 610.0, 615.0, 620.0, 630.0, 635.0, 640.0, 645.0, 650.0, 655.0, 660.0, 665.0, 685.0, 690.0, 695.0, 700.0, 705.0, 710.0, 715.0, 720.0, 725.0, 730.0, 735.0, 740.0, 745.0, 750.0, 755.0, 760.0, 765.0, 770.0, 775.0, 780.0, 785.0, 790.0, 795.0, 800.0, 805.0, 810.0, 815.0, 820.0, 825.0, 830.0, 835.0, 840.0, 845.0, 850.0, 855.0, 860.0, 865.0, 870.0, 875.0, 880.0, 885.0, 890.0, 895.0, 900.0, 905.0, 910.0, 915.0, 920.0, 925.0, 930.0, 935.0, 940.0, 945.0, 955.0, 960.0, 965.0, 970.0, 975.0, 980.0, 985.0, 990.0, 995.0, 1000.0, 1005.0, 1010.0, 1015.0, 1020.0, 1025.0, 1030.0, 1035.0, 1040.0, 1045.0, 1050.0, 1055.0, 1060.0, 1065.0, 1070.0, 1075.0, 1080.0, 1085.0, 1090.0, 1095.0, 1100.0, 1105.0, 1110.0, 1115.0, 1120.0, 1125.0, 1130.0, 1135.0, 1140.0, 1145.0, 1150.0, 1155.0, 1160.0, 1165.0, 1170.0, 1175.0, 1180.0, 1185.0, 1190.0, 1195.0, 1200.0, 1205.0, 1210.0, 1215.0, 1220.0, 1225.0, 1230.0, 1235.0, 1240.0, 1245.0, 1250.0, 1255.0, 1260.0, 1265.0, 1270.0, 1275.0, 1280.0, 1285.0, 1290.0, 1295.0, 1300.0, 1305.0, 1310.0], AB = [47.3, 52.3, 57.3, 67.0, 78.9, 83.9, 88.9, 93.9, 98.9, 103.9, 108.9, 113.9, 118.9, 123.9, 128.9, 133.9, 138.9, 143.9, 148.9, 153.9, 158.9, 163.9, 168.9, 173.9, 178.9, 182.8, 193.1, 198.1, 203.1, 208.1, 213.1, 218.1, 223.1, 227.5, 232.5, 237.5, 248.2, 253.2, 258.2, 263.2, 268.2, 273.2, 278.2, 283.2, 288.2, 293.2, 298.2, 303.2, 308.2, 313.2, 318.8, 323.8, 328.8, 333.8, 338.8, 343.8, 348.8, 353.8, 358.8, 363.8, 368.8, 373.8, 378.8, 383.8, 388.8, 393.8, 398.8, 403.8, 408.8, 413.8, 418.8, 423.8, 428.8, 433.8, 438.8, 443.8, 448.8, 453.8, 458.8, 463.8, 468.8, 473.8, 478.8, 483.8, 488.8, 493.8, 498.8, 503.8, 508.8, 513.8, 518.8, 523.8, 528.8, 533.8, 538.8, 543.8, 548.8, 555.9, 560.9, 565.9, 570.9, 575.9, 580.9, 585.9, 590.9, 604.1, 609.1, 614.1, 619.1, 624.1, 629.1, 634.1, 639.1, 644.1, 649.1, 654.1, 659.1, 664.1, 669.1, 674.1, 679.1, 684.1, 689.1, 694.1, 699.1, 704.1, 709.1, 714.1, 719.1, 724.1, 729.1, 734.1, 739.1, 744.1, 749.1, 754.1, 759.1, 764.1, 769.1, 774.1, 779.1, 784.1, 789.1, 794.1, 799.1, 804.1, 809.1, 814.1, 819.1, 824.1, 829.1, 834.1, 839.1, 844.1, 849.1, 854.1, 859.1, 864.1, 873.8, 878.8, 883.8, 888.8, 893.8, 898.8, 903.8, 908.8, 913.8, 918.8, 923.8, 928.8, 933.8, 938.8, 943.8, 948.8, 953.8, 958.8, 963.8, 968.8, 973.8, 978.8, 983.8, 988.8, 993.8, 998.8, 1003.8, 1008.8, 1013.8, 1018.8, 1023.8, 1028.8, 1033.8, 1038.8, 1043.8, 1048.8, 1053.8, 1058.8, 1063.8, 1068.8, 1073.8, 1078.8, 1083.8, 1088.8, 1093.8, 1098.8, 1103.8, 1108.8, 1113.8, 1118.8, 1123.8, 1128.8, 1133.8, 1138.8, 1143.8, 1148.8, 1153.8, 1158.8, 1163.8, 1168.8, 1173.8, 1178.8, 1183.8, 1188.8, 1193.8, 1198.8, 1203.8, 1208.8, 1213.8, 1218.8, 1223.8, 1228.8];
+ function a2b(t){
+   if (!AA.length) return t;
+   let i = 0; while (i < AA.length && AA[i] < t) i++;
+   if (i === 0) return Math.max(AB[0] - (AA[0] - t), 0);
+   if (i >= AA.length) return AB[AB.length-1] + (t - AA[AA.length-1]);
+   const w = (t - AA[i-1]) / Math.max(AA[i] - AA[i-1], 1e-9);
+   return AB[i-1] + w * (AB[i] - AB[i-1]);
+ }
+ function b2a(t){
+   if (!AB.length) return t;
+   let i = 0; while (i < AB.length && AB[i] < t) i++;
+   if (i === 0) return Math.max(AA[0] - (AB[0] - t), 0);
+   if (i >= AB.length) return AA[AA.length-1] + (t - AB[AB.length-1]);
+   const w = (t - AB[i-1]) / Math.max(AB[i] - AB[i-1], 1e-9);
+   return AA[i-1] + w * (AA[i] - AA[i-1]);
+ }
+ const sb = document.createElement("div");
+ sb.id = "stickybar";
+ sb.style.cssText = "flex-basis:100%;position:relative;height:18px;background:#d8dee4;border-radius:4px;margin-top:4px;cursor:pointer";
+ badge.after(sb);
  function inRanges(t, rs){ for (const [a,b] of rs) { if (t >= a && t < b) return true; } return false; }
  function setBadge(changed){
    if (changed) { badge.style.background = "#fb8500"; badge.textContent = "🟠 変化あり（要確認）"; }
    else { badge.style.background = "#1a7f37"; badge.textContent = "🟢 前回と一致（スルーOK）"; }
  }
- const cur = document.getElementById("diffcur");
  const DUR = 1380;
+ for (const [a, b] of RA) {
+   const seg = document.createElement("div");
+   seg.style.cssText = "position:absolute;top:0;bottom:0;background:#fb8500;" +
+     "left:" + (a / DUR * 100) + "%;width:" + Math.max((b - a) / DUR * 100, 0.4) + "%";
+   sb.appendChild(seg);
+ }
+ const cur = document.createElement("div");
+ cur.style.cssText = "position:absolute;top:-3px;bottom:-3px;width:3px;background:#0969da;left:0;border-radius:2px";
+ sb.appendChild(cur);
+ sb.addEventListener("click", e => {
+   const r = sb.getBoundingClientRect();
+   const t = Math.max(0, Math.min((e.clientX - r.left) / r.width, 1)) * DUR;
+   if (typeof seek1 === "function") seek1(t + 2);
+   if (typeof seek4 === "function") seek4(a2b(t) + 2);
+   cur.style.left = (t / DUR * 100) + "%";
+ });
  function onTime(v, rs, isA){
    if (v.paused && v.currentTime === 0) return;
    setBadge(inRanges(v.currentTime, rs));
-   if (cur && isA) cur.style.left = Math.min(v.currentTime / DUR * 100, 100) + "%";
+   const ta = isA ? v.currentTime : b2a(v.currentTime);
+   cur.style.left = Math.min(ta / DUR * 100, 100) + "%";
  }
  const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
  if (v1) v1.addEventListener("timeupdate", () => onTime(v1, RA, true));
