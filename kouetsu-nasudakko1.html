@@ -1724,6 +1724,10 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 })();
 </script>
 
+
+
+
+
 <script id="player_tools_js">
 (function(){
  const FPS = 23.976;
@@ -1818,6 +1822,10 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  if (DRIVE) {
    const gurl = id => "https://drive-video-proxy.drive-proxy.workers.dev/d/" + id;
    document.getElementById("drvbtn").addEventListener("click", () => {
+     if (window.currentRound && window.currentRound !== "1") {
+       if (typeof note === "function") note("⚠ この回の動画はまだありません(読み込み中止)");
+       return;
+     }
      if (DRIVE.first)  { v1.src = gurl(DRIVE.first.id);  v1.load(); }
      if (DRIVE.second) { v4.src = gurl(DRIVE.second.id); v4.load(); }
      const st1 = document.getElementById("st1"), st4 = document.getElementById("st4");
@@ -1853,7 +1861,10 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    const badge = document.getElementById("matchbadge");
    const sb = document.getElementById("stickybar");
    const L = (window.RL || ["前稿", "後稿"]);
+   window.currentRound = n;
+   const drv = document.getElementById("drvbtn");
    if (HAVE.indexOf(n) < 0) {
+     if (drv) { drv.style.background = "#8b949e"; drv.textContent = "☁️ この回の動画はまだありません"; }
      clearV(v1); clearV(v4);
      if (st1) st1.textContent = "⚠ " + L[0] + ": この回の動画はまだありません";
      if (st4) st4.textContent = "⚠ " + L[1] + ": この回の動画はまだありません";
@@ -1861,6 +1872,7 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
      if (sb) sb.style.visibility = "hidden";
      if (typeof note === "function") note("⚠ この回の動画はまだありません(チェック未実施)");
    } else {
+     if (drv) { drv.style.background = "#1a7f37"; drv.textContent = "☁️ ドライブから動画を読み込む"; }
      restoreV(v1); restoreV(v4);
      if (sb) sb.style.visibility = "";
      if (badge && badge.textContent.indexOf("まだ実施") >= 0) badge.textContent = "再生すると一致状況が出ます";
