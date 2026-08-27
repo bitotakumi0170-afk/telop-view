@@ -1645,6 +1645,10 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 
 
+
+
+
+
 <script id="matchbadge_js">
 (function(){
  const RA = [[0, 47], [59, 60], [64, 70], [80, 87], [92, 126], [135, 137], [140, 145], [176, 183], [189, 246], [254, 256], [264, 265], [281, 322], [345, 434], [547, 549], [563, 565], [567, 569], [577, 602], [618, 704], [706, 718], [744, 757], [822, 840], [869, 883], [903, 934], [940, 955], [966, 984], [995, 1015], [1032, 1054], [1099, 1109], [1216, 1220], [1228, 1237], [1310, 1312], [1317, 1318]];
@@ -1712,6 +1716,92 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
  if (v1) v1.addEventListener("timeupdate", () => onTime(v1, RA, true));
  if (v4) v4.addEventListener("timeupdate", () => onTime(v4, RB, false));
+
+ // --- ⛶ 大画面モード: 動画+シークバー+バッジを画面いっぱいに(ネイティブ全画面と違いバーが見える) ---
+ const tools = document.getElementById("ptools");
+ if (tools && v1 && v4) {
+   const bigBtn = document.createElement("button");
+   bigBtn.className = "jump";
+   bigBtn.style.background = "#6f42c1";
+   bigBtn.textContent = "⛶ 大画面";
+   tools.insertBefore(bigBtn, tools.firstChild);
+
+   let overlay = null;
+   const ph = { v: document.createComment("v"), b: document.createComment("b"), s: document.createComment("s") };
+
+   function openBig(){
+     const v = (!v4.paused) ? v4 : (!v1.paused ? v1 : (v4.closest(".box").style.display === "none" ? v1 : (v1.closest(".box").style.display === "none" ? v4 : v1)));
+     const wasPlaying = !v.paused;
+     overlay = document.createElement("div");
+     overlay.style.cssText = "position:fixed;inset:0;background:#000;z-index:1000;display:flex;flex-direction:column;padding:6px;box-sizing:border-box";
+     const top = document.createElement("div");
+     top.style.cssText = "display:flex;gap:6px;align-items:center;margin-bottom:4px";
+     const closeBtn = document.createElement("button");
+     closeBtn.className = "jump";
+     closeBtn.style.background = "#57606a";
+     closeBtn.textContent = "✕ 閉じる";
+     const swapBtn = document.createElement("button");
+     swapBtn.className = "jump";
+     swapBtn.style.background = "#0969da";
+     swapBtn.textContent = "前稿/後稿 切替";
+     top.append(closeBtn, swapBtn);
+     const wrap = document.createElement("div");
+     wrap.style.cssText = "flex:1;display:flex;align-items:center;justify-content:center;min-height:0";
+     overlay.append(top, wrap);
+     document.body.appendChild(overlay);
+     document.body.style.overflow = "hidden";
+
+     let cv = v;
+     function mount(x){
+       const t = x.currentTime, playing = !x.paused;
+       x.replaceWith(ph.v);            // 既存位置にプレースホルダ(戻す時用)は最初の1回だけ有効
+       wrap.innerHTML = "";
+       wrap.appendChild(x);
+       x.style.cssText = "max-width:100%;max-height:100%;width:100%;height:auto";
+       x.currentTime = t;
+       if (playing) x.play();
+       cv = x;
+     }
+     // バッジとバーを下に移動
+     badge.replaceWith(ph.b);
+     sb.replaceWith(ph.s);
+     overlay.append(badge, sb);
+     badge.style.marginTop = "6px";
+     mount(v);
+
+     swapBtn.addEventListener("click", () => {
+       const other = (cv === v1) ? v4 : v1;
+       const t = cv.currentTime;
+       // 対応表で相手の時刻へ
+       const nt = (cv === v1) ? a2b(t) : b2a(t);
+       const playing = !cv.paused;
+       cv.pause();
+       // 現在の動画を元の場所へ戻し、相手をマウント
+       ph.v.replaceWith(cv);
+       cv.style.cssText = "";
+       other.replaceWith(ph.v);
+       wrap.innerHTML = "";
+       wrap.appendChild(other);
+       other.style.cssText = "max-width:100%;max-height:100%;width:100%;height:auto";
+       other.currentTime = nt;
+       if (playing) other.play();
+       cv = other;
+     });
+
+     closeBtn.addEventListener("click", () => {
+       cv.pause();
+       ph.v.replaceWith(cv);
+       cv.style.cssText = "";
+       ph.b.replaceWith(badge);
+       ph.s.replaceWith(sb);
+       badge.style.marginTop = "4px";
+       overlay.remove();
+       overlay = null;
+       document.body.style.overflow = "";
+     });
+   }
+   bigBtn.addEventListener("click", () => { if (!overlay) openBig(); });
+ }
 })();
 </script>
 
