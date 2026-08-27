@@ -1532,110 +1532,7 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 
 
-<script id="player_tools_js">
-(function(){
- const FPS = 23.976;
- const DRIVE = {"first": {"id": "1TnuIE-bGFIOdsaeh8rlwaTlOAMVuLSCn", "label": "初稿"}, "second": {"id": "1OxZw82cLkQcdG0bS0XnjiJOWWCrWwIdG", "label": "2稿"}};
- const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
- if (!v1 || !v4) return;
- [v1, v4].forEach(v => { v.setAttribute("playsinline", ""); v.setAttribute("preload", "metadata"); });
- let lastV = v1;
- [v1, v4].forEach(v => {
-   ["play", "seeking", "click"].forEach(ev => v.addEventListener(ev, () => { lastV = v; }));
- });
 
- // --- ツールバー ---
- const players = document.getElementById("players");
- const bar = document.createElement("div");
- bar.id = "ptools";
- bar.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0;font-size:13px";
- let html = '<span style="color:#57606a">速度:</span>';
- for (const r of [1, 2, 4, 8]) {
-   html += '<button class="jump spd" data-r="' + r + '" style="background:' + (r === 1 ? "#0969da" : "#57606a") + '">' + r + 'x</button>';
- }
- html += '<span style="color:#57606a;margin-left:8px">表示:</span>';
- html += '<button class="jump vw" data-v="both" style="background:#0969da">両方</button>';
- html += '<button class="jump vw" data-v="v1" style="background:#57606a">前稿のみ</button>';
- html += '<button class="jump vw" data-v="v4" style="background:#57606a">後稿のみ</button>';
- html += '<span style="color:#8b949e;font-size:12px;margin-left:6px">PC: ←→=1フレーム / Shift+←→=10フレーム</span>';
- if (DRIVE) {
-   html += '<button class="jump" id="drvbtn" style="background:#1a7f37">☁️ ドライブから動画を読み込む</button>';
- }
- bar.innerHTML = html;
- players.after(bar);
-
- const box1 = v1.closest(".box"), box4 = v4.closest(".box");
- bar.querySelectorAll(".vw").forEach(b => b.addEventListener("click", () => {
-   const m = b.dataset.v;
-   box1.style.display = (m === "v4") ? "none" : "";
-   box4.style.display = (m === "v1") ? "none" : "";
-   if (m === "v1") lastV = v1;
-   if (m === "v4") lastV = v4;
-   bar.querySelectorAll(".vw").forEach(x => x.style.background = "#57606a");
-   b.style.background = "#0969da";
- }));
-
- bar.querySelectorAll(".spd").forEach(b => b.addEventListener("click", () => {
-   const r = parseFloat(b.dataset.r);
-   [v1, v4].forEach(v => { try { v.playbackRate = r; } catch (e) {} });
-   bar.querySelectorAll(".spd").forEach(x => x.style.background = "#57606a");
-   b.style.background = "#0969da";
- }));
-
- // --- フレーム送り ---
- document.addEventListener("keydown", e => {
-   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-   const tag = (document.activeElement || {}).tagName || "";
-   if (tag === "INPUT" || tag === "TEXTAREA") return;
-   e.preventDefault();
-   const step = (e.shiftKey ? 10 : 1) / FPS * (e.key === "ArrowRight" ? 1 : -1);
-   const v = lastV || v1;
-   v.pause();
-   v.currentTime = Math.max(0, v.currentTime + step);
- });
-
- // --- YouTube式: 画面の左右をダブルタップで±5秒 ---
- [v1, v4].forEach(v => {
-   v.style.touchAction = "manipulation";   // iPhoneのダブルタップ拡大を抑止
-   function skip(x){
-     const r = v.getBoundingClientRect();
-     const step = (x - r.left) < r.width / 2 ? -5 : 5;
-     v.currentTime = Math.max(0, v.currentTime + step);
-     lastV = v;
-     const tag = document.createElement("div");
-     tag.textContent = step > 0 ? "+5秒 ⏩" : "⏪ -5秒";
-     tag.style.cssText = "position:absolute;top:40%;" + (step > 0 ? "right:8%" : "left:8%") +
-       ";background:rgba(0,0,0,.65);color:#fff;padding:6px 12px;border-radius:16px;" +
-       "font-size:14px;pointer-events:none;z-index:30";
-     const host = v.closest(".box") || v.parentElement;
-     host.style.position = "relative";
-     host.appendChild(tag);
-     setTimeout(() => tag.remove(), 500);
-   }
-   v.addEventListener("dblclick", e => { e.preventDefault(); skip(e.clientX); });
-   let lastTap = 0, lastX = 0;
-   v.addEventListener("touchend", e => {
-     const now = Date.now();
-     const x = (e.changedTouches[0] || {}).clientX || 0;
-     if (now - lastTap < 350 && Math.abs(x - lastX) < 60) { e.preventDefault(); skip(x); lastTap = 0; }
-     else { lastTap = now; lastX = x; }
-   });
- });
-
- // --- ドライブ読み込み ---
- if (DRIVE) {
-   const gurl = id => "https://drive-video-proxy.drive-proxy.workers.dev/d/" + id;
-   document.getElementById("drvbtn").addEventListener("click", () => {
-     if (DRIVE.first)  { v1.src = gurl(DRIVE.first.id);  v1.load(); }
-     if (DRIVE.second) { v4.src = gurl(DRIVE.second.id); v4.load(); }
-     const st1 = document.getElementById("st1"), st4 = document.getElementById("st4");
-     if (st1 && DRIVE.first)  st1.textContent = (window.RL ? RL[0] : "前稿") + ": ドライブ読み込み";
-     if (st4 && DRIVE.second) st4.textContent = (window.RL ? RL[1] : "後稿") + ": ドライブ読み込み";
-     if (typeof note === "function") note("ドライブから読み込みました(再生開始まで数秒かかることがあります)");
-   });
- }
-})();
-</script>
 
 
 
@@ -1824,5 +1721,154 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    h.addEventListener("click", () => { open = !open; render(); });
    render();
  });
+})();
+</script>
+
+<script id="player_tools_js">
+(function(){
+ const FPS = 23.976;
+ const DRIVE = {"first": {"id": "1TnuIE-bGFIOdsaeh8rlwaTlOAMVuLSCn", "label": "初稿"}, "second": {"id": "1OxZw82cLkQcdG0bS0XnjiJOWWCrWwIdG", "label": "2稿"}};
+ const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
+ if (!v1 || !v4) return;
+ [v1, v4].forEach(v => { v.setAttribute("playsinline", ""); v.setAttribute("preload", "metadata"); });
+ let lastV = v1;
+ [v1, v4].forEach(v => {
+   ["play", "seeking", "click"].forEach(ev => v.addEventListener(ev, () => { lastV = v; }));
+ });
+
+ // --- ツールバー ---
+ const players = document.getElementById("players");
+ const bar = document.createElement("div");
+ bar.id = "ptools";
+ bar.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0;font-size:13px";
+ let html = '<span style="color:#57606a">速度:</span>';
+ for (const r of [1, 2, 4, 8]) {
+   html += '<button class="jump spd" data-r="' + r + '" style="background:' + (r === 1 ? "#0969da" : "#57606a") + '">' + r + 'x</button>';
+ }
+ html += '<span style="color:#57606a;margin-left:8px">表示:</span>';
+ html += '<button class="jump vw" data-v="both" style="background:#0969da">両方</button>';
+ html += '<button class="jump vw" data-v="v1" style="background:#57606a">前稿のみ</button>';
+ html += '<button class="jump vw" data-v="v4" style="background:#57606a">後稿のみ</button>';
+ html += '<span style="color:#8b949e;font-size:12px;margin-left:6px">PC: ←→=1フレーム / Shift+←→=10フレーム</span>';
+ if (DRIVE) {
+   html += '<button class="jump" id="drvbtn" style="background:#1a7f37">☁️ ドライブから動画を読み込む</button>';
+ }
+ bar.innerHTML = html;
+ players.after(bar);
+
+ const box1 = v1.closest(".box"), box4 = v4.closest(".box");
+ bar.querySelectorAll(".vw").forEach(b => b.addEventListener("click", () => {
+   const m = b.dataset.v;
+   box1.style.display = (m === "v4") ? "none" : "";
+   box4.style.display = (m === "v1") ? "none" : "";
+   if (m === "v1") lastV = v1;
+   if (m === "v4") lastV = v4;
+   bar.querySelectorAll(".vw").forEach(x => x.style.background = "#57606a");
+   b.style.background = "#0969da";
+ }));
+
+ bar.querySelectorAll(".spd").forEach(b => b.addEventListener("click", () => {
+   const r = parseFloat(b.dataset.r);
+   [v1, v4].forEach(v => { try { v.playbackRate = r; } catch (e) {} });
+   bar.querySelectorAll(".spd").forEach(x => x.style.background = "#57606a");
+   b.style.background = "#0969da";
+ }));
+
+ // --- フレーム送り ---
+ document.addEventListener("keydown", e => {
+   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+   const tag = (document.activeElement || {}).tagName || "";
+   if (tag === "INPUT" || tag === "TEXTAREA") return;
+   e.preventDefault();
+   const step = (e.shiftKey ? 10 : 1) / FPS * (e.key === "ArrowRight" ? 1 : -1);
+   const v = lastV || v1;
+   v.pause();
+   v.currentTime = Math.max(0, v.currentTime + step);
+ });
+
+ // --- YouTube式: 画面の左右をダブルタップで±5秒 ---
+ [v1, v4].forEach(v => {
+   v.style.touchAction = "manipulation";   // iPhoneのダブルタップ拡大を抑止
+   function skip(x){
+     const r = v.getBoundingClientRect();
+     const step = (x - r.left) < r.width / 2 ? -5 : 5;
+     v.currentTime = Math.max(0, v.currentTime + step);
+     lastV = v;
+     const tag = document.createElement("div");
+     tag.textContent = step > 0 ? "+5秒 ⏩" : "⏪ -5秒";
+     tag.style.cssText = "position:absolute;top:40%;" + (step > 0 ? "right:8%" : "left:8%") +
+       ";background:rgba(0,0,0,.65);color:#fff;padding:6px 12px;border-radius:16px;" +
+       "font-size:14px;pointer-events:none;z-index:30";
+     const host = v.closest(".box") || v.parentElement;
+     host.style.position = "relative";
+     host.appendChild(tag);
+     setTimeout(() => tag.remove(), 500);
+   }
+   v.addEventListener("dblclick", e => { e.preventDefault(); skip(e.clientX); });
+   let lastTap = 0, lastX = 0;
+   v.addEventListener("touchend", e => {
+     const now = Date.now();
+     const x = (e.changedTouches[0] || {}).clientX || 0;
+     if (now - lastTap < 350 && Math.abs(x - lastX) < 60) { e.preventDefault(); skip(x); lastTap = 0; }
+     else { lastTap = now; lastX = x; }
+   });
+ });
+
+ // --- ドライブ読み込み ---
+ if (DRIVE) {
+   const gurl = id => "https://drive-video-proxy.drive-proxy.workers.dev/d/" + id;
+   document.getElementById("drvbtn").addEventListener("click", () => {
+     if (DRIVE.first)  { v1.src = gurl(DRIVE.first.id);  v1.load(); }
+     if (DRIVE.second) { v4.src = gurl(DRIVE.second.id); v4.load(); }
+     const st1 = document.getElementById("st1"), st4 = document.getElementById("st4");
+     if (st1 && DRIVE.first)  st1.textContent = (window.RL ? RL[0] : "前稿") + ": ドライブ読み込み";
+     if (st4 && DRIVE.second) st4.textContent = (window.RL ? RL[1] : "後稿") + ": ドライブ読み込み";
+     if (typeof note === "function") note("ドライブから読み込みました(再生開始まで数秒かかることがあります)");
+   });
+ }
+})();
+</script>
+
+<script id="round_guard_js">
+(function(){
+ // 動画データが存在する回だけ再生を許可する。他の回では動画を外して「ありません」を表示
+ const HAVE = ["1"];
+ const orig = window.showRound;
+ const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
+ if (!orig || !v1 || !v4) return;
+ const stash = {};
+ function clearV(v){
+   if (v.src) { stash[v.id] = v.src; }
+   v.pause();
+   v.removeAttribute("src");
+   v.load();
+ }
+ function restoreV(v){
+   if (stash[v.id] && !v.getAttribute("src")) { v.src = stash[v.id]; v.load(); }
+ }
+ window.showRound = function(n){
+   orig(n);
+   n = String(n);
+   const st1 = document.getElementById("st1"), st4 = document.getElementById("st4");
+   const badge = document.getElementById("matchbadge");
+   const sb = document.getElementById("stickybar");
+   const L = (window.RL || ["前稿", "後稿"]);
+   if (HAVE.indexOf(n) < 0) {
+     clearV(v1); clearV(v4);
+     if (st1) st1.textContent = "⚠ " + L[0] + ": この回の動画はまだありません";
+     if (st4) st4.textContent = "⚠ " + L[1] + ": この回の動画はまだありません";
+     if (badge) { badge.textContent = "この回のチェックはまだ実施されていません"; badge.style.background = "#8b949e"; }
+     if (sb) sb.style.visibility = "hidden";
+     if (typeof note === "function") note("⚠ この回の動画はまだありません(チェック未実施)");
+   } else {
+     restoreV(v1); restoreV(v4);
+     if (sb) sb.style.visibility = "";
+     if (badge && badge.textContent.indexOf("まだ実施") >= 0) badge.textContent = "再生すると一致状況が出ます";
+     if (st1 && stash.v1) st1.textContent = L[0] + ": 読み込み済み";
+     if (st4 && stash.v4) st4.textContent = L[1] + ": 読み込み済み";
+   }
+ };
+ // 現在表示中の回にも適用
+ try { window.showRound(localStorage.getItem("round_nasudakko1") || "1"); } catch (e) {}
 })();
 </script>
