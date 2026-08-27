@@ -1576,6 +1576,8 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 })();
 </script>
 
+
+
 <script id="player_tools_js">
 (function(){
  const FPS = 23.976;
@@ -1625,7 +1627,7 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
  // --- ドライブ読み込み ---
  if (DRIVE) {
-   const gurl = id => "https://drive.usercontent.google.com/download?id=" + id + "&export=download&confirm=t";
+   const gurl = id => "https://drive-video-proxy.drive-proxy.workers.dev/d/" + id;
    document.getElementById("drvbtn").addEventListener("click", () => {
      if (DRIVE.first)  { v1.src = gurl(DRIVE.first.id);  v1.load(); }
      if (DRIVE.second) { v4.src = gurl(DRIVE.second.id); v4.load(); }
