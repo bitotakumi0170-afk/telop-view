@@ -1641,6 +1641,10 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 
 
+
+
+
+
 <script id="matchbadge_js">
 (function(){
  const RA = [[0, 47], [59, 60], [64, 70], [80, 87], [92, 126], [135, 137], [140, 145], [176, 183], [189, 246], [254, 256], [264, 265], [281, 322], [345, 434], [547, 549], [563, 565], [567, 569], [577, 602], [618, 704], [706, 718], [744, 757], [822, 840], [869, 883], [903, 934], [940, 955], [966, 984], [995, 1015], [1032, 1054], [1099, 1109], [1216, 1220], [1228, 1237], [1310, 1312], [1317, 1318]];
@@ -1649,7 +1653,7 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  if (!players) return;
  const badge = document.createElement("div");
  badge.id = "matchbadge";
- badge.style.cssText = "flex-basis:100%;text-align:center;margin-top:4px;" +
+ badge.style.cssText = "width:100%;flex-basis:100%;box-sizing:border-box;text-align:center;margin-top:4px;" +
    "padding:3px 14px;border-radius:14px;font-size:13px;font-weight:bold;background:#8b949e;color:#fff";
  badge.textContent = "再生すると一致状況が出ます";
  players.style.flexWrap = "wrap";
@@ -1675,7 +1679,7 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  }
  const sb = document.createElement("div");
  sb.id = "stickybar";
- sb.style.cssText = "flex-basis:100%;position:relative;height:18px;background:#d8dee4;border-radius:4px;margin-top:4px;cursor:pointer";
+ sb.style.cssText = "width:100%;flex-basis:100%;box-sizing:border-box;position:relative;height:18px;background:#d8dee4;border-radius:4px;margin-top:4px;cursor:pointer";
  badge.after(sb);
  function inRanges(t, rs){ for (const [a,b] of rs) { if (t >= a && t < b) return true; } return false; }
  function setBadge(changed){
