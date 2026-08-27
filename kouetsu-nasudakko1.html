@@ -1575,3 +1575,65 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  });
 })();
 </script>
+
+<script id="player_tools_js">
+(function(){
+ const FPS = 23.976;
+ const DRIVE = {"first": {"id": "1TnuIE-bGFIOdsaeh8rlwaTlOAMVuLSCn", "label": "初稿"}, "second": {"id": "1OxZw82cLkQcdG0bS0XnjiJOWWCrWwIdG", "label": "2稿"}};
+ const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
+ if (!v1 || !v4) return;
+ [v1, v4].forEach(v => { v.setAttribute("playsinline", ""); v.setAttribute("preload", "metadata"); });
+ let lastV = v1;
+ [v1, v4].forEach(v => {
+   ["play", "seeking", "click"].forEach(ev => v.addEventListener(ev, () => { lastV = v; }));
+ });
+
+ // --- ツールバー ---
+ const players = document.getElementById("players");
+ const bar = document.createElement("div");
+ bar.id = "ptools";
+ bar.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 0;font-size:13px";
+ let html = '<span style="color:#57606a">速度:</span>';
+ for (const r of [1, 2, 4, 8]) {
+   html += '<button class="jump spd" data-r="' + r + '" style="background:' + (r === 1 ? "#0969da" : "#57606a") + '">' + r + 'x</button>';
+ }
+ html += '<span style="color:#8b949e;font-size:12px;margin-left:6px">PC: ←→=1フレーム / Shift+←→=10フレーム</span>';
+ if (DRIVE) {
+   html += '<button class="jump" id="drvbtn" style="background:#1a7f37">☁️ ドライブから動画を読み込む</button>';
+ }
+ bar.innerHTML = html;
+ players.after(bar);
+
+ bar.querySelectorAll(".spd").forEach(b => b.addEventListener("click", () => {
+   const r = parseFloat(b.dataset.r);
+   [v1, v4].forEach(v => { try { v.playbackRate = r; } catch (e) {} });
+   bar.querySelectorAll(".spd").forEach(x => x.style.background = "#57606a");
+   b.style.background = "#0969da";
+ }));
+
+ // --- フレーム送り ---
+ document.addEventListener("keydown", e => {
+   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+   const tag = (document.activeElement || {}).tagName || "";
+   if (tag === "INPUT" || tag === "TEXTAREA") return;
+   e.preventDefault();
+   const step = (e.shiftKey ? 10 : 1) / FPS * (e.key === "ArrowRight" ? 1 : -1);
+   const v = lastV || v1;
+   v.pause();
+   v.currentTime = Math.max(0, v.currentTime + step);
+ });
+
+ // --- ドライブ読み込み ---
+ if (DRIVE) {
+   const gurl = id => "https://drive.usercontent.google.com/download?id=" + id + "&export=download&confirm=t";
+   document.getElementById("drvbtn").addEventListener("click", () => {
+     if (DRIVE.first)  { v1.src = gurl(DRIVE.first.id);  v1.load(); }
+     if (DRIVE.second) { v4.src = gurl(DRIVE.second.id); v4.load(); }
+     const st1 = document.getElementById("st1"), st4 = document.getElementById("st4");
+     if (st1 && DRIVE.first)  st1.textContent = (window.RL ? RL[0] : "前稿") + ": ドライブ読み込み";
+     if (st4 && DRIVE.second) st4.textContent = (window.RL ? RL[1] : "後稿") + ": ドライブ読み込み";
+     if (typeof note === "function") note("ドライブから読み込みました(再生開始まで数秒かかることがあります)");
+   });
+ }
+})();
+</script>
