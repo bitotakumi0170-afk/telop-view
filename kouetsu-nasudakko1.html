@@ -1560,7 +1560,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  players.style.flexWrap = "wrap";
  players.appendChild(badge);
 
- // --- 動画直下のシークバー(灰=一致/橙=変化・再生に連動・タップでジャンプ) ---
  const AA = [45.0, 50.0, 55.0, 70.0, 85.0, 90.0, 95.0, 100.0, 105.0, 110.0, 115.0, 120.0, 125.0, 130.0, 135.0, 140.0, 145.0, 150.0, 155.0, 160.0, 165.0, 170.0, 175.0, 180.0, 185.0, 190.0, 235.0, 240.0, 245.0, 250.0, 255.0, 260.0, 265.0, 270.0, 275.0, 280.0, 295.0, 300.0, 305.0, 310.0, 315.0, 320.0, 325.0, 330.0, 335.0, 340.0, 345.0, 350.0, 355.0, 360.0, 390.0, 395.0, 400.0, 405.0, 410.0, 415.0, 420.0, 425.0, 430.0, 435.0, 440.0, 445.0, 450.0, 455.0, 460.0, 465.0, 470.0, 475.0, 480.0, 485.0, 490.0, 495.0, 500.0, 505.0, 510.0, 515.0, 520.0, 525.0, 530.0, 535.0, 540.0, 545.0, 550.0, 555.0, 560.0, 565.0, 570.0, 575.0, 580.0, 585.0, 590.0, 595.0, 600.0, 605.0, 610.0, 615.0, 620.0, 630.0, 635.0, 640.0, 645.0, 650.0, 655.0, 660.0, 665.0, 685.0, 690.0, 695.0, 700.0, 705.0, 710.0, 715.0, 720.0, 725.0, 730.0, 735.0, 740.0, 745.0, 750.0, 755.0, 760.0, 765.0, 770.0, 775.0, 780.0, 785.0, 790.0, 795.0, 800.0, 805.0, 810.0, 815.0, 820.0, 825.0, 830.0, 835.0, 840.0, 845.0, 850.0, 855.0, 860.0, 865.0, 870.0, 875.0, 880.0, 885.0, 890.0, 895.0, 900.0, 905.0, 910.0, 915.0, 920.0, 925.0, 930.0, 935.0, 940.0, 945.0, 955.0, 960.0, 965.0, 970.0, 975.0, 980.0, 985.0, 990.0, 995.0, 1000.0, 1005.0, 1010.0, 1015.0, 1020.0, 1025.0, 1030.0, 1035.0, 1040.0, 1045.0, 1050.0, 1055.0, 1060.0, 1065.0, 1070.0, 1075.0, 1080.0, 1085.0, 1090.0, 1095.0, 1100.0, 1105.0, 1110.0, 1115.0, 1120.0, 1125.0, 1130.0, 1135.0, 1140.0, 1145.0, 1150.0, 1155.0, 1160.0, 1165.0, 1170.0, 1175.0, 1180.0, 1185.0, 1190.0, 1195.0, 1200.0, 1205.0, 1210.0, 1215.0, 1220.0, 1225.0, 1230.0, 1235.0, 1240.0, 1245.0, 1250.0, 1255.0, 1260.0, 1265.0, 1270.0, 1275.0, 1280.0, 1285.0, 1290.0, 1295.0, 1300.0, 1305.0, 1310.0], AB = [47.3, 52.3, 57.3, 67.0, 78.9, 83.9, 88.9, 93.9, 98.9, 103.9, 108.9, 113.9, 118.9, 123.9, 128.9, 133.9, 138.9, 143.9, 148.9, 153.9, 158.9, 163.9, 168.9, 173.9, 178.9, 182.8, 193.1, 198.1, 203.1, 208.1, 213.1, 218.1, 223.1, 227.5, 232.5, 237.5, 248.2, 253.2, 258.2, 263.2, 268.2, 273.2, 278.2, 283.2, 288.2, 293.2, 298.2, 303.2, 308.2, 313.2, 318.8, 323.8, 328.8, 333.8, 338.8, 343.8, 348.8, 353.8, 358.8, 363.8, 368.8, 373.8, 378.8, 383.8, 388.8, 393.8, 398.8, 403.8, 408.8, 413.8, 418.8, 423.8, 428.8, 433.8, 438.8, 443.8, 448.8, 453.8, 458.8, 463.8, 468.8, 473.8, 478.8, 483.8, 488.8, 493.8, 498.8, 503.8, 508.8, 513.8, 518.8, 523.8, 528.8, 533.8, 538.8, 543.8, 548.8, 555.9, 560.9, 565.9, 570.9, 575.9, 580.9, 585.9, 590.9, 604.1, 609.1, 614.1, 619.1, 624.1, 629.1, 634.1, 639.1, 644.1, 649.1, 654.1, 659.1, 664.1, 669.1, 674.1, 679.1, 684.1, 689.1, 694.1, 699.1, 704.1, 709.1, 714.1, 719.1, 724.1, 729.1, 734.1, 739.1, 744.1, 749.1, 754.1, 759.1, 764.1, 769.1, 774.1, 779.1, 784.1, 789.1, 794.1, 799.1, 804.1, 809.1, 814.1, 819.1, 824.1, 829.1, 834.1, 839.1, 844.1, 849.1, 854.1, 859.1, 864.1, 873.8, 878.8, 883.8, 888.8, 893.8, 898.8, 903.8, 908.8, 913.8, 918.8, 923.8, 928.8, 933.8, 938.8, 943.8, 948.8, 953.8, 958.8, 963.8, 968.8, 973.8, 978.8, 983.8, 988.8, 993.8, 998.8, 1003.8, 1008.8, 1013.8, 1018.8, 1023.8, 1028.8, 1033.8, 1038.8, 1043.8, 1048.8, 1053.8, 1058.8, 1063.8, 1068.8, 1073.8, 1078.8, 1083.8, 1088.8, 1093.8, 1098.8, 1103.8, 1108.8, 1113.8, 1118.8, 1123.8, 1128.8, 1133.8, 1138.8, 1143.8, 1148.8, 1153.8, 1158.8, 1163.8, 1168.8, 1173.8, 1178.8, 1183.8, 1188.8, 1193.8, 1198.8, 1203.8, 1208.8, 1213.8, 1218.8, 1223.8, 1228.8];
  function a2b(t){
    if (!AA.length) return t;
@@ -1614,7 +1613,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
  if (v1) v1.addEventListener("timeupdate", () => onTime(v1, RA, true));
  if (v4) v4.addEventListener("timeupdate", () => onTime(v4, RB, false));
 
- // --- ⛶ 大画面モード: 動画+シークバー+バッジを画面いっぱいに(ネイティブ全画面と違いバーが見える) ---
  const tools = document.getElementById("ptools");
  if (tools && v1 && v4) {
    const bigBtn = document.createElement("button");
@@ -1659,7 +1657,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
        if (playing) x.play();
        cv = x;
      }
-     // バッジとバーを下に移動
      badge.replaceWith(ph.b);
      sb.replaceWith(ph.s);
      overlay.append(badge, sb);
@@ -1669,11 +1666,9 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
      swapBtn.addEventListener("click", () => {
        const other = (cv === v1) ? v4 : v1;
        const t = cv.currentTime;
-       // 対応表で相手の時刻へ
        const nt = (cv === v1) ? a2b(t) : b2a(t);
        const playing = !cv.paused;
        cv.pause();
-       // 現在の動画を元の場所へ戻し、相手をマウント
        ph.v.replaceWith(cv);
        cv.style.cssText = "";
        other.replaceWith(ph.v);
@@ -1704,7 +1699,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 <script id="collapse_js">
 (function(){
- // 🎬構成の変更 / 🔍フレーム点検 は見出しタップで開閉(既定は閉じて画面をすっきりさせる)
  document.querySelectorAll("h1").forEach(h => {
    const t = h.textContent || "";
    if (!(t.includes("構成の変更") || t.includes("フレーム単位の点検"))) return;
@@ -1740,7 +1734,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    ["play", "seeking", "click"].forEach(ev => v.addEventListener(ev, () => { lastV = v; }));
  });
 
- // --- ツールバー ---
  const players = document.getElementById("players");
  const bar = document.createElement("div");
  bar.id = "ptools";
@@ -1778,7 +1771,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    b.style.background = "#0969da";
  }));
 
- // --- フレーム送り ---
  document.addEventListener("keydown", e => {
    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
    const tag = (document.activeElement || {}).tagName || "";
@@ -1790,7 +1782,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    v.currentTime = Math.max(0, v.currentTime + step);
  });
 
- // --- YouTube式: 画面の左右をダブルタップで±5秒 ---
  [v1, v4].forEach(v => {
    v.style.touchAction = "manipulation";   // iPhoneのダブルタップ拡大を抑止
    function skip(x){
@@ -1818,7 +1809,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
    });
  });
 
- // --- ドライブ読み込み ---
  if (DRIVE) {
    const gurl = id => "https://drive-video-proxy.drive-proxy.workers.dev/d/" + id;
    document.getElementById("drvbtn").addEventListener("click", () => {
@@ -1839,7 +1829,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
 
 <script id="round_guard_js">
 (function(){
- // 動画データが存在する回だけ再生を許可する。他の回では動画を外して「ありません」を表示
  const HAVE = ["1"];
  const orig = window.showRound;
  const v1 = document.getElementById("v1"), v4 = document.getElementById("v4");
@@ -1880,7 +1869,6 @@ function seek4(t4){ v1.pause(); seekOne(v4,t4-2,'st4'); document.getElementById(
      if (st4 && stash.v4) st4.textContent = L[1] + ": 読み込み済み";
    }
  };
- // 現在表示中の回にも適用
  try { window.showRound(localStorage.getItem("round_nasudakko1") || "1"); } catch (e) {}
 })();
 </script>
