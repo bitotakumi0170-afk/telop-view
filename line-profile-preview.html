@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LINE プロフィール素材プレビュー｜尾藤AI 校閲＆文字起こしサービス</title>
+<style>
+  :root{
+    --navy:#0d1a3f; --ink:#16224f; --sub:#5a6b90; --line:#e2e8f4; --coral:#ff5468;
+    --bg:#f5f7fb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif;
+       line-height:1.7;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto;padding:48px 20px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  .lead{color:var(--sub);margin:0 0 40px;font-size:15px}
+  h2{font-size:18px;margin:48px 0 16px;padding-left:12px;border-left:4px solid var(--coral)}
+  .grid{display:flex;flex-wrap:wrap;gap:24px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;flex:1 1 280px}
+  .card h3{font-size:15px;margin:0 0 4px}
+  .card p{font-size:13px;color:var(--sub);margin:0 0 14px}
+  .card img{width:100%;border-radius:14px;display:block}
+  .icons .card>img{width:180px;height:180px;border-radius:50%;
+         box-shadow:0 6px 20px rgba(20,35,80,.18)}
+  .sizes{display:flex;align-items:flex-end;gap:14px;margin-top:14px}
+  .sizes img{border-radius:50%;width:auto;flex:none}
+  .badge{display:inline-block;font-size:11px;color:#fff;background:var(--coral);
+         border-radius:999px;padding:2px 10px;margin-left:8px;vertical-align:2px}
+  /* LINE プロフィール風モック */
+  .mock{width:340px;border-radius:20px;overflow:hidden;background:#fff;
+        border:1px solid var(--line);box-shadow:0 10px 30px rgba(20,35,80,.12)}
+  .mock .cover{position:relative;aspect-ratio:1080/878;background-size:cover}
+  .mock .cover::after{content:"";position:absolute;inset:auto 0 0 0;height:38%;
+        background:linear-gradient(to bottom,rgba(6,12,34,0),rgba(6,12,34,.55))}
+  .mock .id{position:absolute;left:18px;bottom:16px;z-index:2;display:flex;align-items:center;gap:12px}
+  .mock .id img{width:64px;height:64px;border-radius:50%;border:2px solid rgba(255,255,255,.9)}
+  .mock .id b{color:#fff;font-size:14px;text-shadow:0 1px 6px rgba(0,0,0,.5)}
+  .mock .body{padding:14px 18px 18px;font-size:12px;color:var(--sub)}
+  .mock .btns{display:flex;gap:8px;margin-top:10px}
+  .mock .btns span{flex:1;text-align:center;border:1px solid var(--line);border-radius:8px;
+        padding:6px 0;font-size:11px}
+  table{border-collapse:collapse;width:100%;font-size:13px;background:#fff;
+        border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line)}
+  th{background:#f0f3fa;font-weight:700;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  code{background:#eef1f8;border-radius:4px;padding:1px 6px;font-size:12px}
+  ul{font-size:14px;color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LINE プロフィール素材プレビュー</h1>
+  <p class="lead">尾藤AI 校閲＆文字起こしサービス／アイコン3案・背景2案。画像を右クリック（長押し）で保存できます。</p>
+
+  <h2>表示イメージ</h2>
+  <div class="grid">
+    <div class="mock">
+      <div class="cover" style="background-image:url(assets/line/bg-1080x878.png)">
+        <div class="id"><img src="assets/line/icon-640.png" alt=""><b>尾藤AI 校閲＆文字起こしサービス</b></div>
+      </div>
+      <div class="body">友だち 1,234人
+        <div class="btns"><span>トーク</span><span>通知</span><span>シェア</span></div>
+      </div>
+    </div>
+    <div class="mock">
+      <div class="cover" style="background-image:url(assets/line/bg-1080x878-light.png)">
+        <div class="id"><img src="assets/line/icon-640.png" alt=""><b>尾藤AI 校閲＆文字起こしサービス</b></div>
+      </div>
+      <div class="body">友だち 1,234人
+        <div class="btns"><span>トーク</span><span>通知</span><span>シェア</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>プロフィール画像（640 × 640）</h2>
+  <div class="grid icons">
+    <div class="card">
+      <h3>A：吹き出し＋波形＋チェック<span class="badge">推奨</span></h3>
+      <p>「音声がテキストになる」＋「赤入れで校閲」を1枚に。小さくても形が崩れません。</p>
+      <img src="assets/line/icon-640.png" alt="アイコンA">
+      <div class="sizes">
+        <img src="assets/line/icon-640.png" width="64" height="64" alt="">
+        <img src="assets/line/icon-640.png" width="40" height="40" alt="">
+        <img src="assets/line/icon-640.png" width="28" height="28" alt="">
+      </div>
+    </div>
+    <div class="card">
+      <h3>B：ロゴタイプ「尾藤」</h3>
+      <p>名前で覚えてもらう案。トーク一覧でも屋号が読み取れます。</p>
+      <img src="assets/line/icon-640-monogram.png" alt="アイコンB">
+      <div class="sizes">
+        <img src="assets/line/icon-640-monogram.png" width="64" height="64" alt="">
+        <img src="assets/line/icon-640-monogram.png" width="40" height="40" alt="">
+        <img src="assets/line/icon-640-monogram.png" width="28" height="28" alt="">
+      </div>
+    </div>
+    <div class="card">
+      <h3>C：波形バッジ</h3>
+      <p>いちばんシンプルな案。音声まわりの印象を強く出したいとき向け。</p>
+      <img src="assets/line/icon-640-wave.png" alt="アイコンC">
+      <div class="sizes">
+        <img src="assets/line/icon-640-wave.png" width="64" height="64" alt="">
+        <img src="assets/line/icon-640-wave.png" width="40" height="40" alt="">
+        <img src="assets/line/icon-640-wave.png" width="28" height="28" alt="">
+      </div>
+    </div>
+  </div>
+
+  <h2>背景画像（1080 × 878）</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>ネイビー<span class="badge">推奨</span></h3>
+      <p>アイコンと同系色。白文字がはっきり出ます。</p>
+      <img src="assets/line/bg-1080x878.png" alt="背景（ネイビー）">
+    </div>
+    <div class="card">
+      <h3>ライト</h3>
+      <p>やわらかい印象にしたいとき用。内容は同じ。</p>
+      <img src="assets/line/bg-1080x878-light.png" alt="背景（ライト）">
+    </div>
+  </div>
+
+  <h2>仕様メモ</h2>
+  <table>
+    <tr><th>プロフィール画像</th><td>640 × 640 px／PNG／3MB以下。LINE上では円形に切り抜かれるため、要素は中央の円内に配置。</td></tr>
+    <tr><th>背景画像</th><td>1080 × 878 px／PNG／10MB以下。下部にアイコンとアカウント名が重なるので、下 1/3 は文字なし。</td></tr>
+    <tr><th>カラー</th><td>ネイビー <code>#0D1A3F</code>／ブルー <code>#3A6AFF</code>／シアン <code>#3CD6F0</code>／校閲レッド <code>#FF5468</code></td></tr>
+    <tr><th>書体</th><td>Noto Sans JP（Black / Medium）</td></tr>
+    <tr><th>再生成</th><td><code>assets/line/tools/icon.py</code>・<code>bg.py</code>。キャッチコピーは <code>bg.py</code> 冒頭の定数で変更可。</td></tr>
+  </table>
+
+  <h2>差し替えのヒント</h2>
+  <ul>
+    <li>キャッチコピー「話した言葉が、そのまま原稿に。」は <code>bg.py</code> の <code>TITLE_A</code> / <code>TITLE_B</code> で変更できます。</li>
+    <li>下のピル（文字起こし／校閲・校正／整文・リライト）は <code>PILLS</code> のリストを書き換えるだけです。</li>
+    <li>料金や連絡先など変わりやすい情報は、背景画像ではなくリッチメニューや挨拶メッセージに置くのがおすすめです。</li>
+  </ul>
+</div>
+</body>
+</html>
