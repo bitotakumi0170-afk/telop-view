@@ -52,7 +52,26 @@ JSX_TEMPLATE = r"""// TS1 → Photoshop テキストレイヤ生成スクリプ�
 var SPEC = %(spec)s;
 
 function c(s){return charIDToTypeID(s);} function s(x){return stringIDToTypeID(x);}
-function norm(t){ return String(t).replace(/[\s\u3000\-]/g, "").toLowerCase(); }
+function toks(t){ var a = String(t).toLowerCase().split(/[\s\u3000\-_]+/), o = []; for (var i = 0; i < a.length; i++) if (a[i]) o.push(a[i]); return o; }
+// ヒント語がすべて名前に含まれるか。2 文字以下（B, L7 などウェイト記号）は単語として一致するときだけ
+function hintMatch(name, hs) {
+  var ts = toks(name), joined = ts.join("");
+  for (var k = 0; k < hs.length; k++) {
+    var h = String(hs[k]).toLowerCase().replace(/\s/g, ""), ok = false;
+    if (h.length <= 2) {
+      for (var i = 0; i < ts.length; i++) {
+        var t = ts[i];
+        if (t == h) { ok = true; break; }
+        if (t.length > h.length && t.substr(t.length - h.length) == h) {
+          var pc = t.charAt(t.length - h.length - 1);
+          if (!(pc >= "a" && pc <= "z")) { ok = true; break; }
+        }
+      }
+    } else { ok = joined.indexOf(h) >= 0; }
+    if (!ok) return false;
+  }
+  return true;
+}
 
 // ---- フォントを探す（PostScript 名 → 名前のヒント語）
 function findFont() {
@@ -61,15 +80,10 @@ function findFont() {
     for (i = 0; i < app.fonts.length; i++) if (app.fonts[i].postScriptName == SPEC.ps_font) return app.fonts[i].postScriptName;
   }
   for (var h = 0; h < SPEC.font_hints.length; h++) {
-    var hs = SPEC.font_hints[h];
     for (i = 0; i < app.fonts.length; i++) {
       f = app.fonts[i];
-      var names = [f.name, f.family + f.style, f.postScriptName];
-      for (var n = 0; n < names.length; n++) {
-        var ok = true, nn = norm(names[n]);
-        for (var k = 0; k < hs.length; k++) if (nn.indexOf(norm(hs[k])) < 0) { ok = false; break; }
-        if (ok) return f.postScriptName;
-      }
+      var names = [f.name, f.family + " " + f.style, f.postScriptName];
+      for (var n = 0; n < names.length; n++) if (hintMatch(names[n], SPEC.font_hints[h])) return f.postScriptName;
     }
   }
   return null;
@@ -317,10 +331,10 @@ def read_psd_text(path, layer_name=None):
 
 
 def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name=None, font_id=None,
-               color_order="RGBA", clear_history=False):
+               color_order="RGBA", clear_history=False, font_fit=None):
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
-    font = FontGlyphSource(font_path, font_index) if font_path else None
+    font = FontGlyphSource(font_path, font_index, fit=font_fit) if font_path else None
     ratio = font.cell_ratio if font else 1.0
     ps_size = info["size"]
     size = round(ps_size * ratio, 3)  # Photoshop の em → VWS のセル高

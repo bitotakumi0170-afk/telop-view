@@ -74,14 +74,44 @@ def find(hint_sets=(), postscript=None, extra_dirs=(), cache_path=None):
     return r
 
 
+def tokens(name: str):
+    n = unicodedata.normalize("NFKC", name or "")
+    for ch in "-_　":
+        n = n.replace(ch, " ")
+    return [t.lower() for t in n.split() if t]
+
+
+def hint_match(name: str, hints) -> bool:
+    """ヒント語がすべて名前に含まれるか。
+    2 文字以下の語（ウェイト記号 B / L7 など）は単語として一致する場合だけ（B が DB・EB に誤一致しないように）"""
+    toks = tokens(name)
+    for h in hints:
+        h = unicodedata.normalize("NFKC", h).lower().replace(" ", "")
+        if len(h) <= 2:
+            ok = any(t == h or (t.endswith(h) and not ("a" <= t[-len(h) - 1] <= "z")) for t in toks)
+        else:
+            ok = h in "".join(toks)
+        if not ok:
+            return False
+    return True
+
+
+def postscript_name(path, index=0):
+    from fontTools.ttLib import TTFont
+    try:
+        f = TTFont(path, fontNumber=index, lazy=True)
+        return f["name"].getDebugName(6)
+    except Exception:
+        return None
+
+
 def _find(table, hint_sets, postscript):
     if postscript:
         for e in table:
             if any(norm(n) == norm(postscript) for n in e["names"]):
                 return e["path"], e["index"], e["names"]
     for hints in hint_sets:
-        hs = [norm(h) for h in hints]
         for e in table:
-            if any(all(h in norm(n) for h in hs) for n in e["names"]):
+            if any(hint_match(n, hints) for n in e["names"]):
                 return e["path"], e["index"], e["names"]
     return None

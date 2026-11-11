@@ -5,6 +5,7 @@
   python run.py to-ts1 テロップ.psd ... → テロップ.ts1 / テロップ_確認.png
   python run.py info   素材.ts1 ...   → 文字・色・縁・サイズなどを表示、全項目を 素材_構造.txt に保存
   python run.py diff   A.ts1 B.ts1    → 2 つの違いを項目単位で表示（A_差分.txt に保存）
+  python run.py identify 素材.ts1     → 字形を PC の全フォントと照合してフォントを特定、フォント表.json に登録
 """
 import json
 import os
@@ -34,6 +35,43 @@ def resolve(cfg, p):
     return p if os.path.isabs(p) else os.path.join(cfg["_dir"], p)
 
 
+# ---- フォント表（VWS のフォント番号 ⇄ PC のフォント） --------------------------
+def table_path(cfg):
+    return os.path.join(cfg["_dir"], "フォント表.json")
+
+
+def load_table(cfg):
+    p = table_path(cfg)
+    if os.path.exists(p):
+        with open(p, encoding="utf-8-sig") as f:
+            return json.load(f)
+    return {}
+
+
+def save_table(cfg, tbl):
+    with open(table_path(cfg), "w", encoding="utf-8") as f:
+        json.dump(tbl, f, ensure_ascii=False, indent=1)
+
+
+def font_for_id(cfg, font_id):
+    """VWS フォント番号 → (ファイル, 番号, 実測変換, PostScript 名, 表示名)。未登録なら None"""
+    e = load_table(cfg).get(str(font_id))
+    if e and e.get("file") and os.path.exists(e["file"]):
+        fit = {k: e[k] for k in ("scale", "ox", "oy")} if "scale" in e else None
+        return e["file"], int(e.get("index", 0)), fit, e.get("postscript"), e.get("name")
+    return None
+
+
+def font_for_ps(cfg, ps_name):
+    """Photoshop のフォント (PostScript 名) → フォント表の (VWS 番号, エントリ)"""
+    import fontfind
+    for fid, e in load_table(cfg).items():
+        names = [e.get("postscript")] + list(e.get("names", []))
+        if ps_name and any(n and fontfind.norm(n) == fontfind.norm(ps_name) for n in names):
+            return int(fid), e
+    return None
+
+
 def find_font(cfg, ps_name=None):
     """設定のフォントファイル → PostScript 名 → 名前のヒント語 の順で探す"""
     fp = resolve(cfg, cfg.get("font_file"))
@@ -49,6 +87,44 @@ def find_font(cfg, ps_name=None):
     return None, 0
 
 
+def identify(cfg, path):
+    """TS1 の字形を PC の全フォントと照合してフォントを特定し、フォント表に登録する"""
+    import fontid
+    import fontfind
+    with open(path, "rb") as f:
+        t = TS1(f.read())
+    fid = t.font_id
+    print(f"  文言: {t.text}")
+    print(f"  VWS フォント番号: {fid}")
+    print("  PC のフォントと字形を照合中…（フォントが多いと数分かかります）")
+    cache = os.path.join(cfg["_dir"], ".font_cache.json")
+    if os.path.exists(cache):
+        os.remove(cache)  # 毎回最新のフォント一覧で照合
+    res = fontid.identify(t, cache_path=cache,
+                          progress=lambda k, n: print(f"\r    {k}/{n}", end="", flush=True))
+    print("\r" + " " * 20)
+    if not res:
+        print("  照合できるフォントがありませんでした")
+        return
+    print("  一致度  フォント")
+    for score, names, fp, idx, fit in res[:8]:
+        print(f"   {score * 100:5.1f}%  {' / '.join(names[:3])}   [{os.path.basename(fp)}]")
+    score, names, fp, idx, fit = res[0]
+    if score >= 0.95:
+        ps = fontfind.postscript_name(fp, idx)
+        jp = [n for n in names if any(ord(ch) > 0x2E80 for ch in n)]
+        name = (jp or names or [ps])[0]
+        tbl = load_table(cfg)
+        tbl[str(fid)] = {"name": name, "names": names, "postscript": ps, "file": fp, "index": idx,
+                         "score": round(score, 4), **({k: round(v, 6) for k, v in fit.items()} if fit else {})}
+        save_table(cfg, tbl)
+        print(f"\n  ★ 特定: VWS フォント番号 {fid} = 「{name}」 (PostScript: {ps})")
+        print("     フォント表.json に登録しました。以後の変換でこのフォントを使います")
+    else:
+        print(f"\n  ※ 一致するフォントはこの PC に入っていません（最高 {score * 100:.1f}%。95% 以上で一致とみなします）")
+        print("     このフォントが入っている PC（VWS 端末など）で実行してください")
+
+
 def to_ps(cfg, path):
     from psdbridge import ts1_to_png, ts1_to_psd, ts1_to_jsx
     base = os.path.splitext(path)[0]
@@ -59,16 +135,27 @@ def to_ps(cfg, path):
     print(f"  文言: {info['text']}")
     print(f"  文字色 {info['face_color']} / 縁色 {info['edge_color']} / 縁 {info['edge_width']}px / "
           f"サイズ {info['char_size'][0]:g} / VWS フォント番号 {info['font_id']}")
-    ratio = 1.0
-    fp, fi = find_font(cfg)
-    if fp:
+    ratio, ps_font = 1.0, cfg.get("photoshop_font")
+    hit = font_for_id(cfg, t.font_id)
+    if hit:
+        fp, fi, fit, ps, disp = hit
+        ps_font = ps or ps_font
+        print(f"  フォント: {disp}（フォント表より）")
         try:
-            ratio = FontGlyphSource(fp, fi).cell_ratio
+            ratio = FontGlyphSource(fp, fi, fit=fit).cell_ratio
         except Exception:
             pass
+    else:
+        print(f"  ※ フォント番号 {t.font_id} は未登録です。「フォントを特定する」に .ts1 をドロップすると登録できます")
+        fp, fi = find_font(cfg)
+        if fp:
+            try:
+                ratio = FontGlyphSource(fp, fi).cell_ratio
+            except Exception:
+                pass
     ts1_to_png(t, base + "_再現.png")
     ts1_to_psd(t, base + "_画像レイヤ.psd")
-    ts1_to_jsx(t, base + "_Photoshop用.jsx", name=name, ps_font=cfg.get("photoshop_font"),
+    ts1_to_jsx(t, base + "_Photoshop用.jsx", name=name, ps_font=ps_font,
                font_hints=cfg.get("font_name_hints", []), cell_ratio=ratio,
                ref_png=name + "_再現.png")
     print(f"  → {name}_再現.png / {name}_画像レイヤ.psd / {name}_Photoshop用.jsx")
@@ -82,11 +169,21 @@ def to_ts1(cfg, path):
         tmpl = TS1(f.read())
     info = read_psd_text(path)
     print(f"  文言: {info['text']}  フォント: {info['font']}  サイズ: {info['size']:g}px")
-    fp, fi = find_font(cfg, info["font"])
+    font_id, fit = cfg.get("vws_font_id"), None
+    hit = font_for_ps(cfg, info["font"])
+    if hit:
+        font_id, e = hit
+        fp, fi = e["file"], int(e.get("index", 0))
+        fit = {k: e[k] for k in ("scale", "ox", "oy")} if "scale" in e else None
+        print(f"  VWS フォント番号 {font_id}「{e.get('name')}」（フォント表より）")
+    else:
+        print(f"  ※ 「{info['font']}」の VWS フォント番号は未登録です。番号はテンプレートと同じ {font_id or tmpl.font_id} を書き込みます")
+        print("     （VWS では字形はそのまま表示されますが、フォント名はその番号のフォントになります）")
+        fp, fi = find_font(cfg, info["font"])
     if not fp:
         print("  ※ フォントファイルが見つからないため、テンプレート内の字形だけで組みます")
-    out, info = psd_to_ts1(path, tmpl, font_path=fp, font_index=fi,
-                           font_id=cfg.get("vws_font_id"), clear_history=cfg.get("clear_history", False))
+    out, info = psd_to_ts1(path, tmpl, font_path=fp, font_index=fi, font_fit=fit,
+                           font_id=font_id, clear_history=cfg.get("clear_history", False))
     with open(base + ".ts1", "wb") as f:
         f.write(out)
     t = TS1(out)
@@ -144,7 +241,7 @@ def main():
             return 1
         diff_pair(cfg, files[0], files[1])
         return 0
-    fn = {"to-ps": to_ps, "to-ts1": to_ts1, "info": info}[cmd]
+    fn = {"to-ps": to_ps, "to-ts1": to_ts1, "info": info, "identify": identify}[cmd]
     ng = 0
     for p in files:
         print(os.path.basename(p))

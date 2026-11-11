@@ -641,8 +641,11 @@ class TS1:
 class FontGlyphSource:
     """TTF/OTF からアウトラインを取り出し、VWS 形式（2048 セル・y 下向き・2次スプライン）へ変換"""
 
-    def __init__(self, path, font_number=0):
+    def __init__(self, path, font_number=0, fit=None):
+        """fit = {"scale", "ox", "oy"}: fontid で実測した「フォント単位 → VWS の 2048 セル」の変換。
+        指定があれば VWS が作る字形データと同じ座標になる"""
         from fontTools.ttLib import TTFont
+        self.fit = fit
         self.font = TTFont(path, fontNumber=font_number)
         os2 = self.font["OS/2"]
         self.win_asc = os2.usWinAscent
@@ -654,6 +657,9 @@ class FontGlyphSource:
         self.scale = CELL / (self.win_asc + self.win_desc)
         self.ascent = round(self.win_asc * self.scale)
         self.descent = CELL - self.ascent
+        if fit:
+            self.scale = fit["scale"]
+            self.cell_ratio = CELL / (self.scale * self.upm)
         self.cmap = self.font.getBestCmap()
         self.gs = self.font.getGlyphSet()
 
@@ -674,9 +680,12 @@ class FontGlyphSource:
         adv = self.gs[name].width * sc
         # 全角セル(2048)に中央寄せ（プロポーショナル字形も 2048 送りで扱う）
         ox = (CELL - adv) / 2 if adv < CELL else 0
+        oy = 0.0
+        if self.fit:
+            ox, oy = self.fit.get("ox", 0.0), self.fit.get("oy", 0.0)
 
         def P(pt):
-            return (int(round(pt[0] * sc + ox)), int(round(-pt[1] * sc)))
+            return (int(round(pt[0] * sc + ox)), int(round(-pt[1] * sc + oy)))
 
         contours, cur, segs, last = [], None, [], None
         for op, args in pen.value:

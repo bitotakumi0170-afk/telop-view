@@ -53,6 +53,7 @@ python ts1tool.py compare 素材.ts1 VWS出力.png --diff 差分.png
 ドラッグ＆ドロップで使う場合は `run.py`（`設定.json` を読む）を使います:
 
 ```
+python run.py identify 素材.ts1   # 字形から PC 内のフォントを特定し フォント表.json に登録（番号 ⇄ フォント）
 python run.py to-ps  素材.ts1     # → 素材_再現.png / 素材_画像レイヤ.psd / 素材_Photoshop用.jsx
 python run.py to-ts1 テロップ.psd  # → テロップ.ts1 / テロップ_確認.png
 ```
