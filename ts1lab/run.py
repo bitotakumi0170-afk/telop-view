@@ -53,23 +53,62 @@ def save_table(cfg, tbl):
         json.dump(tbl, f, ensure_ascii=False, indent=1)
 
 
-def font_for_id(cfg, font_id):
-    """VWS フォント番号 → (ファイル, 番号, 実測変換, PostScript 名, 表示名)。未登録なら None"""
+def _resolve_entry(cfg, fid, e, ts1=None):
+    """フォント表の 1 件について、PC 上のフォントファイルを確定する（無ければヒント語で探して表に書き戻す）。
+    ts1 がそのフォントの字形を持っていれば、VWS 座標への倍率・オフセットも実測して保存する"""
+    import fontfind
+    changed = False
+    if not (e.get("file") and os.path.exists(e["file"])):
+        e.pop("file", None)
+        cache = os.path.join(cfg["_dir"], ".font_cache.json")
+        r = fontfind.find(e.get("hints", []), postscript=e.get("postscript"), cache_path=cache)
+        if r:
+            e["file"], e["index"], e["names"] = r[0], r[1], r[2]
+            e["postscript"] = fontfind.postscript_name(r[0], r[1]) or e.get("postscript")
+            for k in ("scale", "ox", "oy", "rms", "score"):
+                e.pop(k, None)
+            changed = True
+    if e.get("file") and "scale" not in e and ts1 is not None and str(ts1.font_id) == str(fid):
+        try:
+            import fontid
+            score, fit = fontid.fit_font(ts1, e["file"], int(e.get("index", 0)))
+            if fit and score >= 0.95:
+                e.update({k: round(v, 6) for k, v in fit.items()})
+                e["score"] = round(score, 4)
+                changed = True
+            elif fit:
+                print(f"  ※ 「{e.get('name')}」として見つけたフォントは字形の一致度が {score * 100:.0f}% です（別ウェイト・別版の可能性）")
+        except Exception:
+            pass
+    if changed:
+        tbl = load_table(cfg)
+        tbl[str(fid)] = e
+        save_table(cfg, tbl)
+    return e
+
+
+def font_for_id(cfg, font_id, ts1=None):
+    """VWS フォント番号 → フォント表のエントリ（file が入っていれば PC にフォントあり）。未登録なら None"""
     e = load_table(cfg).get(str(font_id))
-    if e and e.get("file") and os.path.exists(e["file"]):
-        fit = {k: e[k] for k in ("scale", "ox", "oy")} if "scale" in e else None
-        return e["file"], int(e.get("index", 0)), fit, e.get("postscript"), e.get("name")
-    return None
+    return _resolve_entry(cfg, font_id, e, ts1) if e else None
 
 
-def font_for_ps(cfg, ps_name):
+def font_for_ps(cfg, ps_name, ts1=None):
     """Photoshop のフォント (PostScript 名) → フォント表の (VWS 番号, エントリ)"""
     import fontfind
+    if not ps_name:
+        return None
     for fid, e in load_table(cfg).items():
         names = [e.get("postscript")] + list(e.get("names", []))
-        if ps_name and any(n and fontfind.norm(n) == fontfind.norm(ps_name) for n in names):
-            return int(fid), e
+        hit = any(n and fontfind.norm(n) == fontfind.norm(ps_name) for n in names)
+        hit = hit or any(fontfind.hint_match(ps_name, h) for h in e.get("hints", []))
+        if hit:
+            return int(fid), _resolve_entry(cfg, fid, e, ts1)
     return None
+
+
+def _fit_of(e):
+    return {k: e[k] for k in ("scale", "ox", "oy")} if e and "scale" in e else None
 
 
 def find_font(cfg, ps_name=None):
@@ -115,8 +154,10 @@ def identify(cfg, path):
         jp = [n for n in names if any(ord(ch) > 0x2E80 for ch in n)]
         name = (jp or names or [ps])[0]
         tbl = load_table(cfg)
-        tbl[str(fid)] = {"name": name, "names": names, "postscript": ps, "file": fp, "index": idx,
-                         "score": round(score, 4), **({k: round(v, 6) for k, v in fit.items()} if fit else {})}
+        old = tbl.get(str(fid), {})
+        tbl[str(fid)] = {"name": old.get("name") or name, "names": names, "postscript": ps, "file": fp, "index": idx,
+                         "score": round(score, 4), **({k: round(v, 6) for k, v in fit.items()} if fit else {}),
+                         **({"hints": old["hints"]} if "hints" in old else {})}
         save_table(cfg, tbl)
         print(f"\n  ★ 特定: VWS フォント番号 {fid} = 「{name}」 (PostScript: {ps})")
         print("     フォント表.json に登録しました。以後の変換でこのフォントを使います")
@@ -135,16 +176,17 @@ def to_ps(cfg, path):
     print(f"  文言: {info['text']}")
     print(f"  文字色 {info['face_color']} / 縁色 {info['edge_color']} / 縁 {info['edge_width']}px / "
           f"サイズ {info['char_size'][0]:g} / VWS フォント番号 {info['font_id']}")
-    ratio, ps_font = 1.0, cfg.get("photoshop_font")
-    hit = font_for_id(cfg, t.font_id)
-    if hit:
-        fp, fi, fit, ps, disp = hit
-        ps_font = ps or ps_font
-        print(f"  フォント: {disp}（フォント表より）")
-        try:
-            ratio = FontGlyphSource(fp, fi, fit=fit).cell_ratio
-        except Exception:
-            pass
+    ratio, ps_font, hints = 1.0, cfg.get("photoshop_font"), list(cfg.get("font_name_hints", []))
+    e = font_for_id(cfg, t.font_id, t)
+    if e:
+        ps_font = e.get("postscript") or ps_font
+        hints = list(e.get("hints", [])) + hints
+        print(f"  フォント: {e.get('name')}（フォント表: VWS 番号 {t.font_id}）")
+        if e.get("file"):
+            try:
+                ratio = FontGlyphSource(e["file"], int(e.get("index", 0)), fit=_fit_of(e)).cell_ratio
+            except Exception:
+                pass
     else:
         print(f"  ※ フォント番号 {t.font_id} は未登録です。「フォントを特定する」に .ts1 をドロップすると登録できます")
         fp, fi = find_font(cfg)
@@ -156,7 +198,7 @@ def to_ps(cfg, path):
     ts1_to_png(t, base + "_再現.png")
     ts1_to_psd(t, base + "_画像レイヤ.psd")
     ts1_to_jsx(t, base + "_Photoshop用.jsx", name=name, ps_font=ps_font,
-               font_hints=cfg.get("font_name_hints", []), cell_ratio=ratio,
+               font_hints=hints, cell_ratio=ratio,
                ref_png=name + "_再現.png")
     print(f"  → {name}_再現.png / {name}_画像レイヤ.psd / {name}_Photoshop用.jsx")
 
@@ -169,12 +211,11 @@ def to_ts1(cfg, path):
         tmpl = TS1(f.read())
     info = read_psd_text(path)
     print(f"  文言: {info['text']}  フォント: {info['font']}  サイズ: {info['size']:g}px")
-    font_id, fit = cfg.get("vws_font_id"), None
-    hit = font_for_ps(cfg, info["font"])
+    font_id, fit, fp, fi = cfg.get("vws_font_id"), None, None, 0
+    hit = font_for_ps(cfg, info["font"], tmpl)
     if hit:
         font_id, e = hit
-        fp, fi = e["file"], int(e.get("index", 0))
-        fit = {k: e[k] for k in ("scale", "ox", "oy")} if "scale" in e else None
+        fp, fi, fit = e.get("file"), int(e.get("index", 0)), _fit_of(e)
         print(f"  VWS フォント番号 {font_id}「{e.get('name')}」（フォント表より）")
     else:
         print(f"  ※ 「{info['font']}」の VWS フォント番号は未登録です。番号はテンプレートと同じ {font_id or tmpl.font_id} を書き込みます")

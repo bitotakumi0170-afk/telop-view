@@ -151,3 +151,28 @@ def _fit(pairs):
     res = np.array(A, float) @ sol - np.array(B, float)
     return {"scale": float(sol[0]), "ox": float(sol[1]), "oy": float(sol[2]),
             "rms": float(np.sqrt((res ** 2).mean()))}
+
+
+def fit_font(ts1, path, index=0):
+    """1 つのフォントだけ照合して (一致度, 倍率・オフセット) を返す"""
+    from fontTools.ttLib import TTFont
+    glyphs = pick_chars(ts1)
+    font = TTFont(path, fontNumber=index, lazy=True)
+    cmap = font.getBestCmap() or {}
+    gs = font.getGlyphSet()
+    ious, pairs = [], []
+    for g in glyphs:
+        if g.code not in cmap:
+            continue
+        polys = ts1_glyph_polys(g)
+        bb = _bbox(polys)
+        fp = font_glyph_polys(gs, cmap[g.code])
+        if not fp:
+            continue
+        fb = _bbox(fp)
+        a, b = _raster(polys, bb), _raster(fp, fb)
+        ious.append(np.minimum(a, b).sum() / max(np.maximum(a, b).sum(), 1e-9))
+        pairs.append((bb, fb))
+    if not ious:
+        return 0.0, None
+    return float(np.mean(ious)), _fit(pairs)
