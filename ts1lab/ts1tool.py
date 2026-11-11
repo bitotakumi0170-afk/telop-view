@@ -7,6 +7,7 @@
   python ts1tool.py from-psd in.psd -t template.ts1 -o out.ts1 [--font font.ttf]
   python ts1tool.py text     template.ts1 "新しい文言" -o out.ts1 [--font font.ttf]
   python ts1tool.py selftest in.ts1                     # 解析→再構築のバイト一致などを検証
+  python ts1tool.py compare  in.ts1 vws見本.png --diff d.png  # VWS の見本画像と照合
 """
 import argparse
 import datetime
@@ -84,6 +85,15 @@ def cmd_text(a):
     print(json.dumps(TS1(out).info(a.color_order), ensure_ascii=False))
 
 
+def cmd_compare(a):
+    from calibrate import compare
+    t = load(a.ts1)
+    r = compare(t, a.ref, color_order=a.color_order, diff_path=a.diff)
+    print(json.dumps(r, ensure_ascii=False, indent=1, default=str))
+    if a.diff:
+        print("差分画像:", a.diff, "（赤 = 見本のみ / 緑 = 再現のみ / 黄 = 一致）")
+
+
 def cmd_selftest(a):
     with open(a.ts1, "rb") as f:
         d = f.read()
@@ -110,8 +120,8 @@ def cmd_selftest(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--color-order", choices=["RGBA", "BGRA"], default="RGBA",
-                    help="CRGB のバイト順（未確定。実機と色が違えば BGRA を試す）")
+    ap.add_argument("--color-order", choices=["RGBA", "BGRA"], default="BGRA",
+                    help="CRGB のバイト順（見本画像で BGRA と確認済）")
     ap.add_argument("--edge", type=float, default=None, help="縁の太さ px（既定: ファイルから推定）")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -126,6 +136,10 @@ def main():
     p.set_defaults(f=cmd_to_psd)
 
     p = sub.add_parser("selftest"); p.add_argument("ts1"); p.set_defaults(f=cmd_selftest)
+
+    p = sub.add_parser("compare", help="VWS の見本画像（透過 PNG）と照合")
+    p.add_argument("ts1"); p.add_argument("ref"); p.add_argument("--diff", help="差分画像の出力先")
+    p.set_defaults(f=cmd_compare)
 
     for name, f in (("from-psd", cmd_from_psd), ("text", cmd_text)):
         p = sub.add_parser(name)

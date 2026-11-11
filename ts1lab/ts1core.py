@@ -407,10 +407,11 @@ class TS1:
     def layout(self, newline_code=0x0D):
         """各文字の配置を返す: [(Char, Glyph, x原点, ベースラインy, scale)]
 
-        推定ルール（サンプルの OFRI 描画範囲と ±1px で一致）
-          - 文字送り = 文字サイズ + 字間(ACSP)
+        見本画像（VWS 出力）との照合で確認したルール
+          - 文字送り = 文字サイズ（全角セル）
+          - ACSP（字間）は「その文字の直前」の間隔に効く（1 文字目の ACSP は無視）
           - 行は CSML の x から幅 CSTR.width の枠内で中央揃え
-          - CSML の y が（最終行の）ベースライン
+          - CSML の y がベースライン（複数行の扱いは未確認）
         """
         size_w, size_h = self.char_size
         sp = self.spacings()
@@ -431,17 +432,18 @@ class TS1:
         for li, line in enumerate(lines):
             if not line:
                 continue
-            width = sum(size_w + s for _, s in line) - line[-1][1]
+            width = len(line) * size_w + sum(s for _, s in line[1:])
             x = x0 + (bw - width) / 2
             y = y0 - (len(lines) - 1 - li) * pitch
-            for ch, s in line:
+            for k, (ch, s) in enumerate(line):
+                if k:
+                    x += size_w + s
                 g = glyphs[ch.glyph_index]
                 out.append((ch, g, x, y, size_w / CELL))
-                x += size_w + s
         return out
 
     # -- 情報 ---------------------------------------------------------------
-    def info(self, color_order="RGBA"):
+    def info(self, color_order="BGRA"):
         return {
             "text": self.text,
             "layer_name": self.layer_name,

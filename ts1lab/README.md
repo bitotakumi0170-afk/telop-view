@@ -39,9 +39,12 @@ python ts1tool.py text テンプレート.ts1 "新しい文言" --font xxx.ttf -
 
 # 解析の健全性チェック（解析→再構築でバイト一致するか等）
 python ts1tool.py selftest 素材.ts1
+
+# VWS の出力画像（背景透過 PNG）と照合（位置・縁幅・文字ごとのずれ・差分画像）
+python ts1tool.py compare 素材.ts1 VWS出力.png --diff 差分.png
 ```
 
-色が実機と違う場合は `--color-order BGRA` を試してください（CRGB のバイト順が未確定のため）。
+見本画像との照合結果（サンプル 1 件）: 16 文字すべて ±0.25px 以内、縁幅 6.0px、全体誤差 1.96%。
 
 ## 仕組み
 

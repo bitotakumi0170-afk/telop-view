@@ -18,7 +18,7 @@ CANVAS = (1920, 1080)
 # ----------------------------------------------------------------------------
 # TS1 → PSD（ピクセルレイヤ）
 # ----------------------------------------------------------------------------
-def ts1_to_psd(ts1: TS1, out_path, color_order="RGBA", edge=None):
+def ts1_to_psd(ts1: TS1, out_path, color_order="BGRA", edge=None):
     from psd_tools import PSDImage
     face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
     psd = PSDImage.new("RGBA", CANVAS, color=(0, 0, 0, 0))
@@ -103,7 +103,7 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
 """
 
 
-def ts1_spec(ts1: TS1, color_order="RGBA", edge=None):
+def ts1_spec(ts1: TS1, color_order="BGRA", edge=None):
     cols = ts1.colors(color_order)
     size = ts1.char_size[0]
     sp = ts1.spacings()
@@ -114,7 +114,9 @@ def ts1_spec(ts1: TS1, color_order="RGBA", edge=None):
         "canvas": list(CANVAS),
         "size": size,
         "line_spacing": ts1.line_spacing,
-        "tracking": [int(round(v / size * 1000)) for v, ch in zip(sp, ts1.chars) if ch.code],
+        # VWS の ACSP は「その文字の前」→ Photoshop では 1 つ前の文字のトラッキング
+        "tracking": [int(round(sp[i + 1] / size * 1000)) if i + 1 < len(chars) else 0
+                     for i in range(len(chars))],
         "anchor": [ts1.pos[0] + ts1.box[0] / 2, ts1.pos[1]],
         "fill": list(cols[0][:3]),
         "edge_color": list(cols[1][:3]) if len(cols) > 1 else [0, 0, 0],
@@ -123,7 +125,7 @@ def ts1_spec(ts1: TS1, color_order="RGBA", edge=None):
     }
 
 
-def ts1_to_jsx(ts1: TS1, out_path, ps_font="KozGoPr6N-Heavy", color_order="RGBA", edge=None):
+def ts1_to_jsx(ts1: TS1, out_path, ps_font="KozGoPr6N-Heavy", color_order="BGRA", edge=None):
     spec = ts1_spec(ts1, color_order, edge)
     js = JSX_TEMPLATE % {"spec": json.dumps(spec, ensure_ascii=False), "ps_font": ps_font,
                          "font_id": spec["font_id"]}
@@ -244,13 +246,16 @@ def read_psd_text(path, layer_name=None):
 
 
 def psd_to_ts1(psd_path, template: TS1, font_path=None, layer_name=None, font_id=None,
-               color_order="RGBA", clear_history=False):
+               color_order="BGRA", clear_history=False):
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
     size = round(info["size"], 2)
     n = len(text)
     tr = (info["tracking"] + [0] * n)[:n]
-    spacing = [round(t / 1000 * size, 3) for t in tr] + [0]  # トラッキング(1/1000em) → px
+    # Photoshop のトラッキングは「その文字の後ろ」、VWS の ACSP は「その文字の前」に効く
+    # → VWS の i 文字目 = Photoshop の i-1 文字目のトラッキング（改行の直後は 0）
+    after = [round(t / 1000 * size, 3) for t in tr]
+    spacing = [0.0] + [0.0 if text[i - 1] == "\n" else after[i - 1] for i in range(1, n)] + [0.0]
     font = FontGlyphSource(font_path) if font_path else None
     chars, glyphs = build_text(template, text, font=font, spacing=spacing,
                                size=(size, size), font_id=font_id)
@@ -258,7 +263,7 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, layer_name=None, font_id
     lines = text.split("\n")
     widths, k = [], 0
     for line in lines:
-        w = len(line) * size + sum(spacing[k:k + len(line) - 1]) if line else 0
+        w = len(line) * size + sum(spacing[k + 1:k + len(line)]) if line else 0
         widths.append(w)
         k += len(line) + 1
     w0 = widths[-1]

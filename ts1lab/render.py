@@ -67,7 +67,12 @@ def fill_nonzero(polys, w, h):
     return np.cumsum(acc, axis=1)[:, :w] != 0
 
 
-def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order="RGBA"):
+# 見本画像（VWS 出力）との照合で求めた描画オフセット px（文字面・縁とも ±0.1px 程度まで一致）
+RENDER_OFFSET = (-0.125, -0.375)
+
+
+def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order="BGRA",
+                  offset=RENDER_OFFSET):
     """(face RGBA, edge RGBA, (left, top)) を返す。画像はテロップ範囲だけ切り出し"""
     edge = ts1.edge_width() if edge is None else edge
     edge = edge or 0
@@ -85,7 +90,7 @@ def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_
     polys = []
     for ch, g, x, y, sc in items:
         for c in g.contours:
-            pts = flatten_contour(c, (x - left) * ss, (y - top) * ss, sc * ss)
+            pts = flatten_contour(c, (x + offset[0] - left) * ss, (y + offset[1] - top) * ss, sc * ss)
             polys.append(pts)
     face = fill_nonzero(polys, W * ss, H * ss)
     face_img = Image.fromarray((face * 255).astype(np.uint8), "L")
@@ -116,7 +121,7 @@ def render_preview(ts1, canvas=(1920, 1080), bg=(40, 60, 90), **kw):
     return im
 
 
-def to_svg(ts1, canvas=(1920, 1080), edge=None, color_order="RGBA"):
+def to_svg(ts1, canvas=(1920, 1080), edge=None, color_order="BGRA"):
     """編集可能なベクター（SVG）として書き出す。縁は stroke（paint-order）で表現"""
     edge = ts1.edge_width() if edge is None else edge
     cols = ts1.colors(color_order)
