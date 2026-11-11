@@ -1,7 +1,7 @@
 """TS1 ⇄ Photoshop の橋渡し
 
   TS1 → PSD : 文字面・縁をピクセルレイヤで書き出し（psd-tools）
-  TS1 → JSX : Photoshop で実行すると「編集可能なテキストレイヤ＋境界線効果」を作るスクリプト
+  TS1 → JSX : Photoshop で実行すると「編集可能なテキストレイヤ＋境界線」の PSD を作って保存するスクリプト
   PSD → TS1 : PSD のテキストレイヤ（文字・サイズ・トラッキング・位置・色・境界線）を読み、
               テンプレート TS1 の書式で組み直す
 """
@@ -16,9 +16,20 @@ CANVAS = (1920, 1080)
 
 
 # ----------------------------------------------------------------------------
-# TS1 → PSD（ピクセルレイヤ）
+# TS1 → 画像 / PSD（ピクセルレイヤ）
 # ----------------------------------------------------------------------------
-def ts1_to_psd(ts1: TS1, out_path, color_order="BGRA", edge=None):
+def ts1_to_png(ts1: TS1, out_path, color_order="RGBA", edge=None):
+    """キャンバス全体（1920×1080）の透過 PNG"""
+    from PIL import Image
+    face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
+    im = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+    im.alpha_composite(edge_img, (max(l, 0), max(t, 0)))
+    im.alpha_composite(face, (max(l, 0), max(t, 0)))
+    im.save(out_path)
+    return out_path
+
+
+def ts1_to_psd(ts1: TS1, out_path, color_order="RGBA", edge=None):
     from psd_tools import PSDImage
     face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
     psd = PSDImage.new("RGBA", CANVAS, color=(0, 0, 0, 0))
@@ -32,34 +43,60 @@ def ts1_to_psd(ts1: TS1, out_path, color_order="BGRA", edge=None):
 
 
 # ----------------------------------------------------------------------------
-# TS1 → JSX（Photoshop で編集可能なテキストレイヤを生成）
+# TS1 → JSX（Photoshop で編集可能なテキストレイヤを生成して PSD 保存）
 # ----------------------------------------------------------------------------
 JSX_TEMPLATE = r"""// TS1 → Photoshop テキストレイヤ生成スクリプト（ts1lab で自動生成）
-// 使い方: Photoshop で [ファイル] > [スクリプト] > [参照...] からこのファイルを実行
-// ※ VWS のフォント番号 (%(font_id)s) と Photoshop のフォントの対応は未確定。FONT を手で合わせてください。
+// 使い方: Photoshop で [ファイル] > [スクリプト] > [参照...] からこのファイルを選ぶ
+//   → 編集可能なテキストレイヤ（＋境界線）の PSD を作り、このファイルと同じフォルダに保存します
 #target photoshop
-var FONT = "%(ps_font)s";            // PostScript 名（例: KozGoPr6N-Heavy）
 var SPEC = %(spec)s;
 
 function c(s){return charIDToTypeID(s);} function s(x){return stringIDToTypeID(x);}
+function norm(t){ return String(t).replace(/[\s\u3000\-]/g, "").toLowerCase(); }
+
+// ---- フォントを探す（PostScript 名 → 名前のヒント語）
+function findFont() {
+  var i, f;
+  if (SPEC.ps_font) {
+    for (i = 0; i < app.fonts.length; i++) if (app.fonts[i].postScriptName == SPEC.ps_font) return app.fonts[i].postScriptName;
+  }
+  for (var h = 0; h < SPEC.font_hints.length; h++) {
+    var hs = SPEC.font_hints[h];
+    for (i = 0; i < app.fonts.length; i++) {
+      f = app.fonts[i];
+      var names = [f.name, f.family + f.style, f.postScriptName];
+      for (var n = 0; n < names.length; n++) {
+        var ok = true, nn = norm(names[n]);
+        for (var k = 0; k < hs.length; k++) if (nn.indexOf(norm(hs[k])) < 0) { ok = false; break; }
+        if (ok) return f.postScriptName;
+      }
+    }
+  }
+  return null;
+}
+var FONT = findFont();
+if (!FONT) { alert("フォントが見つかりません: " + SPEC.font_hints.join(" / ") + "\n仮のフォントで作成します。"); FONT = "MS-Gothic"; }
+
+var oldRuler = app.preferences.rulerUnits, oldType = app.preferences.typeUnits;
 app.preferences.rulerUnits = Units.PIXELS;
 app.preferences.typeUnits = TypeUnits.PIXELS;
-var doc = app.documents.add(SPEC.canvas[0], SPEC.canvas[1], 72, "TS1_" + SPEC.text.substr(0,10),
+var doc = app.documents.add(SPEC.canvas[0], SPEC.canvas[1], 72, SPEC.name,
                             NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
 var lay = doc.artLayers.add();
 lay.kind = LayerKind.TEXT;
-lay.name = SPEC.text;
+lay.name = SPEC.text.replace(/\n/g, " ");
 var ti = lay.textItem;
 ti.contents = SPEC.text.replace(/\n/g, "\r");
 ti.font = FONT;
-ti.size = new UnitValue(SPEC.size, "px");
+ti.size = new UnitValue(SPEC.ps_size, "px");
 ti.justification = Justification.CENTER;
 var col = new SolidColor(); col.rgb.red = SPEC.fill[0]; col.rgb.green = SPEC.fill[1]; col.rgb.blue = SPEC.fill[2];
 ti.color = col;
+ti.useAutoLeading = false;
 ti.leading = new UnitValue(SPEC.size + SPEC.line_spacing, "px");
 ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1], "px")];
 
-// 文字ごとのトラッキング（VWS の字間 px → 1/1000 em）
+// ---- 文字ごとのトラッキング（VWS の字間 → 1/1000 em）
 (function(){
   var ref = new ActionReference(); ref.putEnumerated(c("Lyr "), c("Ordn"), c("Trgt"));
   var td = executeActionGet(ref).getObjectValue(s("textKey"));
@@ -69,7 +106,7 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
     var r = new ActionDescriptor();
     r.putInteger(s("from"), i); r.putInteger(s("to"), i + 1);
     base.putInteger(s("tracking"), SPEC.tracking[i]);
-    base.putUnitDouble(s("size"), c("#Pxl"), SPEC.size);
+    base.putUnitDouble(s("size"), c("#Pxl"), SPEC.ps_size);
     r.putObject(s("textStyle"), s("textStyle"), base);
     list.putObject(s("textStyleRange"), r);
   }
@@ -78,8 +115,9 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
   d.putObject(c("T   "), s("textLayer"), td);
   executeAction(c("setd"), d, DialogModes.NO);
 })();
+ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1], "px")];
 
-// 縁 = レイヤスタイル「境界線（外側）」
+// ---- 縁 = レイヤスタイル「境界線（外側）」
 (function(){
   if (SPEC.edge <= 0) return;
   var d = new ActionDescriptor(); var r = new ActionReference();
@@ -91,7 +129,7 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
   st.putEnumerated(c("Styl"), c("FStl"), c("OutF"));
   st.putEnumerated(c("PntT"), c("FrFl"), c("SClr"));
   st.putEnumerated(c("Md  "), c("BlnM"), c("Nrml"));
-  st.putUnitDouble(c("Opct"), c("#Prc"), 100);
+  st.putUnitDouble(c("Opct"), c("#Prc"), SPEC.edge_opacity);
   st.putUnitDouble(c("Sz  "), c("#Pxl"), SPEC.edge);
   var k = new ActionDescriptor();
   k.putDouble(c("Rd  "), SPEC.edge_color[0]); k.putDouble(c("Grn "), SPEC.edge_color[1]); k.putDouble(c("Bl  "), SPEC.edge_color[2]);
@@ -100,35 +138,68 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
   d.putObject(c("T   "), c("Lefx"), fx);
   executeAction(c("setd"), d, DialogModes.NO);
 })();
+
+// ---- 参考: TS1 から再現した画像を非表示レイヤで重ねる（位置合わせ確認用）
+var here = File($.fileName).parent;
+(function(){
+  var png = new File(here + "/" + SPEC.ref_png);
+  if (!png.exists) return;
+  var pd = app.open(png);
+  var dup = pd.activeLayer.duplicate(doc, ElementPlacement.PLACEATEND);
+  pd.close(SaveOptions.DONOTSAVECHANGES);
+  app.activeDocument = doc;
+  dup.name = "参考：VWS再現（TS1から）";
+  dup.visible = false;
+})();
+
+app.preferences.rulerUnits = oldRuler; app.preferences.typeUnits = oldType;
+var out = new File(here + "/" + SPEC.name + ".psd");
+var opt = new PhotoshopSaveOptions(); opt.layers = true;
+doc.saveAs(out, opt, true);
+alert("保存しました: " + out.fsName + "\nフォント: " + FONT);
 """
 
 
-def ts1_spec(ts1: TS1, color_order="BGRA", edge=None):
-    cols = ts1.colors(color_order)
+def ts1_spec(ts1: TS1, name="telop", color_order="RGBA", edge=None, ps_font=None,
+             font_hints=(), cell_ratio=1.0, ref_png=""):
+    """Photoshop 再現用のパラメータ
+
+    cell_ratio = (winAscent + winDescent) / unitsPerEm（フォントファイルから。不明なら 1）
+      VWS の文字サイズはセル高なので Photoshop のサイズ = VWS サイズ / cell_ratio。
+      全角の送りを VWS（= セル幅）に合わせるため、差分をトラッキングに足す。
+    """
+    face, edgec = ts1.face_color(color_order), ts1.edge_color(color_order)
     size = ts1.char_size[0]
+    ps_size = size / cell_ratio
+    extra = (size - ps_size) / ps_size * 1000  # 送り補正（1/1000 em）
     sp = ts1.spacings()
     chars = [ch for ch in ts1.chars if ch.code]
     text = "".join("\n" if ch.code in (0x0A, 0x0D) else ch.char for ch in chars)
     return {
+        "name": name,
         "text": text,
         "canvas": list(CANVAS),
         "size": size,
+        "ps_size": round(ps_size, 3),
         "line_spacing": ts1.line_spacing,
         # VWS の ACSP は「その文字の前」→ Photoshop では 1 つ前の文字のトラッキング
-        "tracking": [int(round(sp[i + 1] / size * 1000)) if i + 1 < len(chars) else 0
+        "tracking": [int(round(sp[i + 1] / ps_size * 1000 + extra)) if i + 1 < len(chars) else 0
                      for i in range(len(chars))],
         "anchor": [ts1.pos[0] + ts1.box[0] / 2, ts1.pos[1]],
-        "fill": list(cols[0][:3]),
-        "edge_color": list(cols[1][:3]) if len(cols) > 1 else [0, 0, 0],
+        "fill": list(face[:3]),
+        "edge_color": list(edgec[:3]),
+        "edge_opacity": round(edgec[3] / 255 * 100, 1),
         "edge": (ts1.edge_width() if edge is None else edge) or 0,
         "font_id": ts1.font_id,
+        "ps_font": ps_font or "",
+        "font_hints": [list(h) for h in font_hints],
+        "ref_png": ref_png,
     }
 
 
-def ts1_to_jsx(ts1: TS1, out_path, ps_font="KozGoPr6N-Heavy", color_order="BGRA", edge=None):
-    spec = ts1_spec(ts1, color_order, edge)
-    js = JSX_TEMPLATE % {"spec": json.dumps(spec, ensure_ascii=False), "ps_font": ps_font,
-                         "font_id": spec["font_id"]}
+def ts1_to_jsx(ts1: TS1, out_path, **kw):
+    spec = ts1_spec(ts1, **kw)
+    js = JSX_TEMPLATE % {"spec": json.dumps(spec, ensure_ascii=False, indent=1)}
     with open(out_path, "w", encoding="utf-8-sig") as f:  # ExtendScript は BOM 付き UTF-8 が安全
         f.write(js)
     return spec
@@ -245,18 +316,23 @@ def read_psd_text(path, layer_name=None):
     }
 
 
-def psd_to_ts1(psd_path, template: TS1, font_path=None, layer_name=None, font_id=None,
-               color_order="BGRA", clear_history=False):
+def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name=None, font_id=None,
+               color_order="RGBA", clear_history=False):
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
-    size = round(info["size"], 2)
+    font = FontGlyphSource(font_path, font_index) if font_path else None
+    ratio = font.cell_ratio if font else 1.0
+    ps_size = info["size"]
+    size = round(ps_size * ratio, 3)  # Photoshop の em → VWS のセル高
     n = len(text)
     tr = (info["tracking"] + [0] * n)[:n]
     # Photoshop のトラッキングは「その文字の後ろ」、VWS の ACSP は「その文字の前」に効く
     # → VWS の i 文字目 = Photoshop の i-1 文字目のトラッキング（改行の直後は 0）
-    after = [round(t / 1000 * size, 3) for t in tr]
+    #    さらに全角送りの差 (VWS はセル幅 size、Photoshop は em = ps_size) を差し引く
+    def snap(v):  # Photoshop のトラッキングは整数なので、0.1px 未満の端数は丸める
+        return float(round(v)) if abs(v - round(v)) < 0.1 else round(v, 3)
+    after = [snap(t / 1000 * ps_size - (size - ps_size)) for t in tr]
     spacing = [0.0] + [0.0 if text[i - 1] == "\n" else after[i - 1] for i in range(1, n)] + [0.0]
-    font = FontGlyphSource(font_path) if font_path else None
     chars, glyphs = build_text(template, text, font=font, spacing=spacing,
                                size=(size, size), font_id=font_id)
     # 位置: Photoshop のアンカー（ベースライン）→ VWS の枠（中央揃え）
@@ -272,16 +348,8 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, layer_name=None, font_id
     box_w = template.box[0]
     pos = (left + w0 / 2 - box_w / 2, ay + (len(lines) - 1) * (size + template.line_spacing))
 
-    def to_store(c):
-        if c is None:
-            return None
-        r, g, b, a = c
-        return [r, g, b, a] if color_order == "RGBA" else [b, g, r, a]
-
-    colors = [to_store(info["fill"])]
-    if info["edge_color"]:
-        colors.append(to_store(info["edge_color"]))
-    edge = int(round(info["edge"])) if info["edge"] else None
-    out = template.rebuild(chars=chars, glyphs=glyphs, pos=pos, colors=colors,
-                           clear_history=clear_history, edge_width=edge)
+    edge = info["edge"] if info["edge"] else None   # 境界線が無ければテンプレートの縁を維持
+    out = template.rebuild(chars=chars, glyphs=glyphs, pos=pos,
+                           face_color=info["fill"], edge_color=info["edge_color"],
+                           clear_history=clear_history, edge_width=edge, color_order=color_order)
     return out, info

@@ -46,6 +46,13 @@ python ts1tool.py compare 素材.ts1 VWS出力.png --diff 差分.png
 
 見本画像との照合結果（サンプル 1 件）: 16 文字すべて ±0.25px 以内、縁幅 6.0px、全体誤差 1.96%。
 
+ドラッグ＆ドロップで使う場合は `run.py`（`設定.json` を読む）を使います:
+
+```
+python run.py to-ps  素材.ts1     # → 素材_再現.png / 素材_画像レイヤ.psd / 素材_Photoshop用.jsx
+python run.py to-ts1 テロップ.psd  # → テロップ.ts1 / テロップ_確認.png
+```
+
 ## 仕組み
 
 - .ts1 は文字ごとのアウトライン（GDI のグリフ形式・2048 セル）を内蔵しているため、

@@ -45,9 +45,14 @@ def detect_colors(ref_path):
     return [(tuple(int(v) for v in keys[i]), int(counts[i])) for i in order[:4]]
 
 
-def compare(ts1, ref_path, color_order="BGRA", diff_path=None, search=True):
-    cols = ts1.colors(color_order)
-    face_rgb, edge_rgb = cols[0][:3], cols[1][:3]
+def compare(ts1, ref_path, color_order="RGBA", diff_path=None, search=True):
+    face_rgb, edge_rgb = ts1.face_color(color_order)[:3], ts1.edge_color(color_order)[:3]
+    # 見本 PNG の書き出しで R と B が入れ替わっている場合を自動判定
+    ref_cols = [c for c, _ in detect_colors(ref_path)]
+    near = lambda a, b: sum(abs(x - y) for x, y in zip(a, b)) < 30
+    swapped = any(near(c, edge_rgb[::-1]) for c in ref_cols) and not any(near(c, edge_rgb) for c in ref_cols)
+    if swapped:
+        face_rgb, edge_rgb = face_rgb[::-1], edge_rgb[::-1]
     FR, AR, size = split_reference(ref_path, face_rgb, edge_rgb)
     hw = (size[1], size[0])
     total = FR.sum() + AR.sum()
@@ -105,6 +110,8 @@ def compare(ts1, ref_path, color_order="BGRA", diff_path=None, search=True):
         "best_edge_px": float(e),
         "file_edge_px": ts1.edge_width(),
         "colors_in_reference": detect_colors(ref_path),
-        "colors_in_file": ["#%02X%02X%02X" % tuple(c[:3]) for c in cols],
+        "colors_in_file": {"face": "#%02X%02X%02X" % tuple(ts1.face_color(color_order)[:3]),
+                           "edge": "#%02X%02X%02X" % tuple(ts1.edge_color(color_order)[:3])},
+        "reference_rb_swapped": swapped,
         "per_char": per_char,
     }

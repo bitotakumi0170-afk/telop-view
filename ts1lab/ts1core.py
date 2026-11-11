@@ -241,6 +241,19 @@ class HistoryEntry:
     action: str
 
 
+def decode_color(raw, order="RGBA"):
+    """CRGB チャンク → (r, g, b, a)。サンプルは R G B A の順（E7 2F 12 FF = 赤）"""
+    c = raw[14:18]
+    if order == "RGBA":
+        return (c[0], c[1], c[2], c[3])
+    return (c[2], c[1], c[0], c[3])
+
+
+def encode_color(rgba, order="RGBA"):
+    r, g, b, a = (list(rgba) + [255])[:4]
+    return bytes([r, g, b, a]) if order == "RGBA" else bytes([b, g, r, a])
+
+
 class TS1:
     """サンプル構造に沿ったパーサ。未解明部分は生バイトのまま保持し、再構築時に再利用する。"""
 
@@ -315,15 +328,65 @@ class TS1:
         return [r for t, r in self.resources if t == "RCHR"]
 
     def colors(self, order="RGBA"):
+        """CRGB リソースの色を (r, g, b, a) で返す（ORMP 内の順）"""
         out = []
         for t, raw in self.resources:
             if t == "CRGB":
-                c = raw[14:18]
-                if order == "RGBA":
-                    out.append((c[0], c[1], c[2], c[3]))
-                else:  # BGRA
-                    out.append((c[2], c[1], c[0], c[3]))
+                out.append(decode_color(raw, order))
         return out
+
+    def decorations(self, order="RGBA"):
+        """先頭文字の ADCO（装飾）を読み、文字面・縁などの色と太さを返す
+
+        ADCO = u16 ver, u16 件数, 50 バイト × 件数
+          +0  u32 種別   (0 = 文字面, 9 = 縁 … サンプルより)
+          +4  u32 色リソース番号（ORMP の添字 → CRGB）
+          +28 u32 描画順? (文字面 5 / 縁 4)
+          +33 u8  有効? (1)
+          +34 u32 太さ px (縁 6)
+          +38 u32 太さ2 px (縁 6)
+        """
+        p = self.base_attr("ADCO")
+        if not p:
+            return []
+        n = u16(p, 2)
+        out = []
+        for k in range(n):
+            e = 4 + 50 * k
+            if e + 42 > len(p):
+                break
+            kind, res = u32(p, e), u32(p, e + 4)
+            t, raw = self.resources[res] if res < len(self.resources) else (None, None)
+            color = decode_color(raw, order) if t == "CRGB" else None
+            out.append({
+                "index": k,
+                "kind": kind,
+                "role": "face" if kind == 0 else "edge",
+                "role_ja": "文字面" if kind == 0 else "縁",
+                "color_resource": res,
+                "color": color,
+                "color_hex": ("#%02X%02X%02X" % color[:3]) if color else None,
+                "opacity": round(color[3] / 255 * 100, 1) if color else None,
+                "order": u32(p, e + 28),
+                "width": u32(p, e + 34),
+                "width2": u32(p, e + 38),
+                "offset": e,
+            })
+        return out
+
+    def face_color(self, order="RGBA"):
+        for d in self.decorations(order):
+            if d["role"] == "face" and d["color"]:
+                return d["color"]
+        c = self.colors(order)
+        return c[0] if c else (255, 255, 255, 255)
+
+    def edge_color(self, order="RGBA"):
+        for d in self.decorations(order):
+            if d["role"] == "edge" and d["color"]:
+                return d["color"]
+        c = self.colors(order)
+        return c[1] if len(c) > 1 else (0, 0, 0, 255)
 
     # -- SLYR / CSML: レイヤ・文字列 ---------------------------------------
     def _parse_layer(self):
@@ -389,9 +452,11 @@ class TS1:
         return u32(p, 2) if p else None
 
     def edge_width(self):
-        """ADCO 内の縁幅（推定）。サンプルでは 6"""
-        p = self.base_attr("ADCO")
-        return p[88] if p and len(p) > 92 else None
+        """縁の太さ px（ADCO の縁エントリ）。サンプルは 6（見本画像で確認済）"""
+        for d in self.decorations():
+            if d["role"] == "edge":
+                return d["width"]
+        return None
 
     def spacings(self):
         """各文字の字間 (px)。DAAR が無い文字は直前の値を引き継ぐ（推定）"""
@@ -443,7 +508,7 @@ class TS1:
         return out
 
     # -- 情報 ---------------------------------------------------------------
-    def info(self, color_order="BGRA"):
+    def info(self, color_order="RGBA"):
         return {
             "text": self.text,
             "layer_name": self.layer_name,
@@ -454,8 +519,12 @@ class TS1:
             "char_size": self.char_size,
             "line_spacing": self.line_spacing,
             "font_id": self.font_id,
-            "edge_width_guess": self.edge_width(),
-            "colors": ["#%02X%02X%02X%02X" % c for c in self.colors(color_order)],
+            "face_color": "#%02X%02X%02X" % self.face_color(color_order)[:3],
+            "edge_color": "#%02X%02X%02X" % self.edge_color(color_order)[:3],
+            "edge_width": self.edge_width(),
+            "decorations": [{k: v for k, v in d.items() if k not in ("offset", "color")}
+                            for d in self.decorations(color_order)],
+            "colors_raw": ["#%02X%02X%02X%02X" % c for c in self.colors(color_order)],
             "spacings": self.spacings(),
             "ofri_bbox": self.ofri_bbox,
             "glyph_count": len(self.glyphs),
@@ -463,8 +532,8 @@ class TS1:
         }
 
     # -- 再構築 -------------------------------------------------------------
-    def rebuild(self, chars=None, glyphs=None, pos=None, colors=None, clear_history=False,
-                keep_glyph_header=True, edge_width=None):
+    def rebuild(self, chars=None, glyphs=None, pos=None, face_color=None, edge_color=None,
+                clear_history=False, keep_glyph_header=True, edge_width=None, color_order="RGBA"):
         """テンプレート（self）の構造を保ったまま、文字列・グリフ・位置・色を差し替えて書き出す"""
         b = self.data
         changed = chars is not None or glyphs is not None or pos is not None
@@ -478,11 +547,16 @@ class TS1:
         ormp = bytearray()
         for g in glyphs:
             ormp += g.encode(keep_header=keep_glyph_header)
-        for t, raw in others:
-            if t == "CRGB" and colors:
-                k = sum(1 for tt, _ in others[:others.index((t, raw))] if tt == "CRGB")
-                if k < len(colors) and colors[k] is not None:
-                    raw = raw[:14] + bytes(colors[k])
+        # 色: ADCO の参照先（旧番号）ごとに差し替え
+        new_color = {}
+        for d in self.decorations():
+            want = face_color if d["role"] == "face" else edge_color
+            if want is not None:
+                new_color[d["color_resource"]] = encode_color(want, color_order)
+        for j, (t, raw) in enumerate(others):
+            res_old = old_ng + j
+            if t == "CRGB" and res_old in new_color:
+                raw = raw[:14] + new_color[res_old]
             ormp += raw
         o = self.off["ORMP"]
         n_res = len(glyphs) + len(others)
@@ -511,18 +585,17 @@ class TS1:
                         v = i32(csml_head, r + k)
                         struct.pack_into("<i", csml_head, r + k, v + fx(dx if k in (34, 46) else dy))
 
+        decos = self.decorations()
         mchr = bytearray()
         for ch in chars:
-            if shift and "ADCO" in ch.attrs:
+            if "ADCO" in ch.attrs and (shift or edge_width is not None):
                 a = bytearray(ch.attrs["ADCO"])
-                for k in (8, 58):  # 色リソース参照（推定）
-                    struct.pack_into("<H", a, k, u16(a, k) + shift)
-                if edge_width is not None:
-                    a[88] = a[92] = int(edge_width)
-                ch = Char(ch.code, ch.glyph_index, {**ch.attrs, "ADCO": bytes(a)}, ch.attr_order, ch.pre_raw)
-            elif edge_width is not None and "ADCO" in ch.attrs:
-                a = bytearray(ch.attrs["ADCO"])
-                a[88] = a[92] = int(edge_width)
+                for d in decos:
+                    e0 = d["offset"]
+                    if shift:  # 色リソース番号をグリフ数の増減に合わせてずらす
+                        struct.pack_into("<I", a, e0 + 4, u32(a, e0 + 4) + shift)
+                    if edge_width is not None and d["role"] == "edge":
+                        struct.pack_into("<II", a, e0 + 34, int(round(edge_width)), int(round(edge_width)))
                 ch = Char(ch.code, ch.glyph_index, {**ch.attrs, "ADCO": bytes(a)}, ch.attr_order, ch.pre_raw)
             mchr += ch.encode()
         eset = b"ESET" + b"\x00" * 4 + struct.pack("<H", len(chars))
@@ -574,6 +647,10 @@ class FontGlyphSource:
         os2 = self.font["OS/2"]
         self.win_asc = os2.usWinAscent
         self.win_desc = os2.usWinDescent
+        self.upm = self.font["head"].unitsPerEm
+        # VWS の「文字サイズ」= セル高 (winAscent + winDescent)。Photoshop のサイズ = em
+        # → Photoshop サイズ = VWS サイズ / cell_ratio
+        self.cell_ratio = (self.win_asc + self.win_desc) / self.upm
         self.scale = CELL / (self.win_asc + self.win_desc)
         self.ascent = round(self.win_asc * self.scale)
         self.descent = CELL - self.ascent

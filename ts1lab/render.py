@@ -71,14 +71,13 @@ def fill_nonzero(polys, w, h):
 RENDER_OFFSET = (-0.125, -0.375)
 
 
-def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order="BGRA",
+def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order="RGBA",
                   offset=RENDER_OFFSET):
     """(face RGBA, edge RGBA, (left, top)) を返す。画像はテロップ範囲だけ切り出し"""
     edge = ts1.edge_width() if edge is None else edge
     edge = edge or 0
-    cols = colors or ts1.colors(color_order)
-    face_rgb = tuple(cols[0][:3]) if cols else (255, 255, 255)
-    edge_rgb = tuple(cols[1][:3]) if len(cols) > 1 else (0, 0, 0)
+    face_rgb = tuple(ts1.face_color(color_order)[:3])
+    edge_rgb = tuple(ts1.edge_color(color_order)[:3])
 
     items = ts1.layout()
     bb = ts1.ink_bbox(edge=edge + 2)
@@ -121,12 +120,11 @@ def render_preview(ts1, canvas=(1920, 1080), bg=(40, 60, 90), **kw):
     return im
 
 
-def to_svg(ts1, canvas=(1920, 1080), edge=None, color_order="BGRA"):
+def to_svg(ts1, canvas=(1920, 1080), edge=None, color_order="RGBA"):
     """編集可能なベクター（SVG）として書き出す。縁は stroke（paint-order）で表現"""
     edge = ts1.edge_width() if edge is None else edge
-    cols = ts1.colors(color_order)
-    fc = "#%02x%02x%02x" % tuple(cols[0][:3])
-    ec = "#%02x%02x%02x" % tuple(cols[1][:3])
+    fc = "#%02x%02x%02x" % tuple(ts1.face_color(color_order)[:3])
+    ec = "#%02x%02x%02x" % tuple(ts1.edge_color(color_order)[:3])
     paths = []
     for ch, g, x, y, sc in ts1.layout():
         if not g.contours:

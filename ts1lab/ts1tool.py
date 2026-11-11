@@ -52,7 +52,11 @@ def cmd_to_psd(a):
     ts1_to_psd(t, a.out, color_order=a.color_order, edge=a.edge)
     print("保存:", a.out)
     if a.jsx:
-        ts1_to_jsx(t, a.jsx, ps_font=a.ps_font, color_order=a.color_order, edge=a.edge)
+        import os as _os
+        name = _os.path.splitext(_os.path.basename(a.jsx))[0]
+        hints = [h.split(",") for h in (a.font_hint or [])]
+        ts1_to_jsx(t, a.jsx, name=name, ps_font=a.ps_font, font_hints=hints,
+                   color_order=a.color_order, edge=a.edge)
         print("保存:", a.jsx)
 
 
@@ -120,8 +124,8 @@ def cmd_selftest(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--color-order", choices=["RGBA", "BGRA"], default="BGRA",
-                    help="CRGB のバイト順（見本画像で BGRA と確認済）")
+    ap.add_argument("--color-order", choices=["RGBA", "BGRA"], default="RGBA",
+                    help="CRGB のバイト順（既定 RGBA: E7 2F 12 = 赤）")
     ap.add_argument("--edge", type=float, default=None, help="縁の太さ px（既定: ファイルから推定）")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -132,7 +136,8 @@ def main():
     p.add_argument("--svg"); p.set_defaults(f=cmd_render)
 
     p = sub.add_parser("to-psd"); p.add_argument("ts1"); p.add_argument("-o", "--out", required=True)
-    p.add_argument("--jsx"); p.add_argument("--ps-font", default="KozGoPr6N-Heavy")
+    p.add_argument("--jsx"); p.add_argument("--ps-font", help="Photoshop のフォント PostScript 名")
+    p.add_argument("--font-hint", action="append", help="フォント名に含まれる語（カンマ区切りで AND、複数指定可）例: ウィン,L7")
     p.set_defaults(f=cmd_to_psd)
 
     p = sub.add_parser("selftest"); p.add_argument("ts1"); p.set_defaults(f=cmd_selftest)
