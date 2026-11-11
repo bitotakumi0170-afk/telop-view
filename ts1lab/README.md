@@ -40,6 +40,10 @@ python ts1tool.py text テンプレート.ts1 "新しい文言" --font xxx.ttf -
 # 解析の健全性チェック（解析→再構築でバイト一致するか等）
 python ts1tool.py selftest 素材.ts1
 
+# 全バイトの構造ダンプ / 2 つの .ts1 の項目単位の差分（設定を 1 つ変えて保存 → どこに入るか調べる）
+python ts1tool.py dump 素材.ts1 -o 構造.txt
+python ts1tool.py diff A.ts1 B.ts1
+
 # VWS の出力画像（背景透過 PNG）と照合（位置・縁幅・文字ごとのずれ・差分画像）
 python ts1tool.py compare 素材.ts1 VWS出力.png --diff 差分.png
 ```

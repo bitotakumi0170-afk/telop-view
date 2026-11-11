@@ -8,6 +8,8 @@
   python ts1tool.py text     template.ts1 "新しい文言" -o out.ts1 [--font font.ttf]
   python ts1tool.py selftest in.ts1                     # 解析→再構築のバイト一致などを検証
   python ts1tool.py compare  in.ts1 vws見本.png --diff d.png  # VWS の見本画像と照合
+  python ts1tool.py dump     in.ts1 [-o 構造.txt]       # 全バイトの構造ダンプ
+  python ts1tool.py diff     a.ts1 b.ts1                # 2 ファイルの項目単位の差分
 """
 import argparse
 import datetime
@@ -98,6 +100,33 @@ def cmd_compare(a):
         print("差分画像:", a.diff, "（赤 = 見本のみ / 緑 = 再現のみ / 黄 = 一致）")
 
 
+def cmd_dump(a):
+    from structure import dump, format_dump
+    with open(a.ts1, "rb") as f:
+        fields = dump(f.read())
+    txt = format_dump(fields, show_zero=a.all)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(txt + "\n")
+        print("保存:", a.out)
+    else:
+        print(txt)
+
+
+def cmd_diff(a):
+    from structure import diff
+    with open(a.a, "rb") as f:
+        da = f.read()
+    with open(a.b, "rb") as f:
+        db = f.read()
+    ta, tb = TS1(da), TS1(db)
+    print(f"A: {ta.text}\nB: {tb.text}\n")
+    rows = diff(da, db, ignore=() if a.all else ("OMR0", "/WVCT", "RCHR"))
+    for k, x, y, note in rows:
+        print(f"{k}\n    A: {x}\n    B: {y}" + (f"\n    ({note})" if note else ""))
+    print(f"\n{len(rows)} 項目が異なります" + ("" if a.all else "（履歴・グリフは除外。--all で全部）"))
+
+
 def cmd_selftest(a):
     with open(a.ts1, "rb") as f:
         d = f.read()
@@ -141,6 +170,14 @@ def main():
     p.set_defaults(f=cmd_to_psd)
 
     p = sub.add_parser("selftest"); p.add_argument("ts1"); p.set_defaults(f=cmd_selftest)
+
+    p = sub.add_parser("dump", help="全バイトを項目に割り当てて表示")
+    p.add_argument("ts1"); p.add_argument("-o", "--out"); p.add_argument("--all", action="store_true", help="0 の項目も表示")
+    p.set_defaults(f=cmd_dump)
+
+    p = sub.add_parser("diff", help="2 つの .ts1 を項目単位で比較（設定の差分解析用）")
+    p.add_argument("a"); p.add_argument("b"); p.add_argument("--all", action="store_true")
+    p.set_defaults(f=cmd_diff)
 
     p = sub.add_parser("compare", help="VWS の見本画像（透過 PNG）と照合")
     p.add_argument("ts1"); p.add_argument("ref"); p.add_argument("--diff", help="差分画像の出力先")

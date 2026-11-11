@@ -3,7 +3,8 @@
 
   python run.py to-ps  素材.ts1 ...   → 素材_再現.png / 素材_画像レイヤ.psd / 素材_Photoshop用.jsx
   python run.py to-ts1 テロップ.psd ... → テロップ.ts1 / テロップ_確認.png
-  python run.py info   素材.ts1 ...   → 文字・色・縁・サイズなどを表示
+  python run.py info   素材.ts1 ...   → 文字・色・縁・サイズなどを表示、全項目を 素材_構造.txt に保存
+  python run.py diff   A.ts1 B.ts1    → 2 つの違いを項目単位で表示（A_差分.txt に保存）
 """
 import json
 import os
@@ -96,9 +97,39 @@ def to_ts1(cfg, path):
 
 
 def info(cfg, path):
+    from structure import dump, format_dump
     with open(path, "rb") as f:
-        t = TS1(f.read())
-    print(json.dumps(t.info(), ensure_ascii=False, indent=1))
+        data = f.read()
+    t = TS1(data)
+    i = t.info()
+    print(f"  文言: {i['text']}")
+    print(f"  位置: x={i['position_x']:g} ベースライン y={i['baseline_y']:g} / 枠 {i['box_width']:g}×{i['box_height']:g}")
+    print(f"  文字サイズ {i['char_size'][0]:g}×{i['char_size'][1]:g} / 行間 {i['line_spacing']:g} / VWS フォント番号 {i['font_id']}")
+    for d in i["decorations"]:
+        print(f"  装飾{d['index']}: {d['role_ja']} 色 {d['color_hex']} 不透明度 {d['opacity']}% 太さ {d['width']}px")
+    print(f"  字間: {i['spacings'][:len(i['text'])]}")
+    out = os.path.splitext(path)[0] + "_構造.txt"
+    with open(out, "w", encoding="utf-8-sig") as f:
+        f.write(format_dump(dump(data)) + "\n")
+    print(f"  → {os.path.basename(out)}（全項目の一覧）")
+
+
+def diff_pair(cfg, a, b):
+    from structure import diff
+    with open(a, "rb") as f:
+        da = f.read()
+    with open(b, "rb") as f:
+        db = f.read()
+    lines = [f"A: {os.path.basename(a)}  「{TS1(da).text}」", f"B: {os.path.basename(b)}  「{TS1(db).text}」", ""]
+    rows = diff(da, db)
+    for k, x, y, note in rows:
+        lines += [k, f"    A: {x}", f"    B: {y}"] + ([f"    ({note})"] if note else [])
+    lines.append(f"\n{len(rows)} 項目が異なります（編集履歴・グリフは除外）")
+    out = os.path.splitext(a)[0] + "_差分.txt"
+    with open(out, "w", encoding="utf-8-sig") as f:
+        f.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+    print(f"→ {out}")
 
 
 def main():
@@ -107,6 +138,12 @@ def main():
         return 1
     cmd, files = sys.argv[1], sys.argv[2:]
     cfg = load_config()
+    if cmd == "diff":
+        if len(files) != 2:
+            print(".ts1 を 2 つ指定してください")
+            return 1
+        diff_pair(cfg, files[0], files[1])
+        return 0
     fn = {"to-ps": to_ps, "to-ts1": to_ts1, "info": info}[cmd]
     ng = 0
     for p in files:
