@@ -83,6 +83,8 @@ def _gdi():
     g.GetCharABCWidthsW.argtypes = [W.HDC, W.UINT, W.UINT, ctypes.POINTER(ABC)]
     g.GetGlyphIndicesW.argtypes = [W.HDC, ctypes.c_wchar_p, ctypes.c_int, ctypes.POINTER(W.WORD), W.DWORD]
     g.GetGlyphIndicesW.restype = W.DWORD
+    g.GetFontData.argtypes = [W.HDC, W.DWORD, W.DWORD, ctypes.c_void_p, W.DWORD]
+    g.GetFontData.restype = W.DWORD
     return g
 
 
@@ -134,6 +136,40 @@ class GdiFont:
     def matched(self):
         """頼んだ書体が実際に選ばれたか"""
         return self.face == self.requested
+
+    def names(self):
+        """フォントの name テーブルから {"postscript", "family", "full"} を読む（無ければ空）"""
+        tag = 0x656D616E      # 'name'
+        n = self.g.GetFontData(self.dc, tag, 0, None, 0)
+        if n in (GDI_ERROR, 0):
+            return {}
+        buf = ctypes.create_string_buffer(n)
+        if self.g.GetFontData(self.dc, tag, 0, buf, n) == GDI_ERROR:
+            return {}
+        b = buf.raw
+        _fmt, count, so = struct.unpack_from(">HHH", b, 0)
+        want = {6: "postscript", 1: "family", 4: "full"}
+        out, rank = {}, {}
+        for i in range(count):
+            pid, eid, lid, nid, ln, off = struct.unpack_from(">HHHHHH", b, 6 + 12 * i)
+            if nid not in want:
+                continue
+            raw = b[so + off:so + off + ln]
+            try:
+                if pid == 3:
+                    txt = raw.decode("utf-16-be")
+                    r = 3 if lid == 0x409 else 2      # 英語名を優先（PostScript 名は英数字）
+                elif pid == 1 and eid == 0:
+                    txt = raw.decode("mac_roman")
+                    r = 1
+                else:
+                    continue
+            except UnicodeDecodeError:
+                continue
+            k = want[nid]
+            if r > rank.get(k, 0):
+                out[k], rank[k] = txt, r
+        return out
 
     def has(self, code):
         s = chr(code)
@@ -228,15 +264,15 @@ class GdiGlyphSource:
     分からないフォントは measure_shift() で、そのフォントの字形を持つ .ts1 から求める
     """
 
-    def __init__(self, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET):
-        self.font = GdiFont(face, weight, charset)
+    def __init__(self, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, italic=False):
+        self.font = GdiFont(face, weight, charset, italic)
         if not self.font.matched():
             got = self.font.face
             self.font.close()
             raise KeyError(f"フォント「{face}」が Windows に入っていません（代わりに「{got}」が選ばれました）")
         self.y_shift = y_shift
         self.ascent, self.descent = self.font.ascent, self.font.descent
-        self.cell_ratio = None
+        self.cell_ratio = 1.0      # VWS の文字サイズ = em の高さ（lfHeight = -2048 で作るので）
 
     def has(self, code):
         return self.font.has(code)
@@ -287,15 +323,48 @@ def _shape(contours):
     return [[(pr, len(ps)) for pr, ps in c.segs] for c in contours]
 
 
-def compare(ts1, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, font_id=None):
+def ref_glyphs(ts1, font_id=None):
+    """照合に使う字形（輪郭のあるもの）。font_id を指定すればそのフォントの字だけ"""
+    return [g for g in ts1.glyphs if g.code and g.contours and (font_id is None or g.font_id == font_id)]
+
+
+def match_font(font, glyphs):
+    """開いてある GdiFont が glyphs（.ts1 の中の字形）と 1 点残らず一致するか。一致すれば y_shift、しなければ None"""
+    if not glyphs:
+        return None
+    try:
+        first = font.native(glyphs[0].code)[0]
+    except KeyError:
+        return None
+    if len(first) != len(glyphs[0].contours):
+        return None
+    guess = convert(first, 0)[0].start[1] - glyphs[0].contours[0].start[1]
+    cache = {glyphs[0].code: first}
+    for s_ in (guess, guess - 1, guess + 1):
+        ok = True
+        for g in glyphs:
+            nat = cache.get(g.code)
+            if nat is None:
+                try:
+                    nat = cache[g.code] = font.native(g.code)[0]
+                except KeyError:
+                    return None
+            cv = convert(nat, s_)
+            if _shape(cv) != _shape(g.contours) or _points(cv) != _points(g.contours):
+                ok = False
+                break
+        if ok:
+            return s_
+    return None
+
+
+def compare(ts1, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, font_id=None, italic=False):
     """ts1 の中の字形と、GDI から作った字形を比べる → (字の数, 完全に一致した字の数, 違う点の数, 点の総数)"""
-    with GdiFont(face, weight, charset) as f:
+    with GdiFont(face, weight, charset, italic) as f:
         if not f.matched():
             return None
         n = ok = bad = tot = 0
-        for g in ts1.glyphs:
-            if not g.code or not g.contours or (font_id is not None and g.font_id != font_id):
-                continue
+        for g in ref_glyphs(ts1, font_id):
             n += 1
             try:
                 native, _ = f.native(g.code)
@@ -315,80 +384,139 @@ def compare(ts1, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, font_id=None
         return n, ok, bad, tot
 
 
-def measure_shift(ts1, face, weight=0, charset=SHIFTJIS_CHARSET, font_id=None):
-    """ts1 の字形に合う y_shift（整数）を探す。全字が完全に一致する値が無ければ None"""
-    with GdiFont(face, weight, charset) as f:
+def measure_shift(ts1, face, weight=0, charset=SHIFTJIS_CHARSET, font_id=None, italic=False):
+    """ts1 の字形に合う y_shift（整数）を返す。そのフォントの全字が 1 点残らず一致しなければ None"""
+    with GdiFont(face, weight, charset, italic) as f:
         if not f.matched():
             return None
-        for g in ts1.glyphs:
-            if not g.code or not g.contours or (font_id is not None and g.font_id != font_id):
-                continue
-            try:
-                native, _ = f.native(g.code)
-            except KeyError:
-                return None
-            if len(native) != len(g.contours):
-                return None
-            # 最初の輪郭の始点（= GDI の最後の点）から候補を出す
-            cv = convert(native, 0)
-            guess = cv[0].start[1] - g.contours[0].start[1]
-            for s in (guess, guess - 1, guess + 1):
-                r = compare(ts1, face, s, weight, charset, font_id)
-                if r and r[0] and r[1] == r[0]:
-                    return s
-            return None
-    return None
+        return match_font(f, ref_glyphs(ts1, font_id))
 
 
-def list_faces(charset=DEFAULT_CHARSET):
-    """入っているフォントの書体名（縦書き用の @ つきは除く）"""
+class ENUMLOGFONTEXW(ctypes.Structure):
+    _fields_ = [("lf", LOGFONTW), ("elfFullName", W.WCHAR * 64), ("elfStyle", W.WCHAR * 32), ("elfScript", W.WCHAR * 32)]
+
+
+def _enum(dc, g, face, charset):
+    out = []
+    PROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.POINTER(ENUMLOGFONTEXW), ctypes.c_void_p, W.DWORD, W.LPARAM)
+
+    def cb(elf, _tm, typ, _lp):
+        lf = elf.contents.lf
+        out.append((lf.lfFaceName, int(lf.lfWeight), bool(lf.lfItalic), int(lf.lfCharSet) & 0xFF, int(typ), elf.contents.elfFullName))
+        return 1
+
+    proc = PROC(cb)
+    g.EnumFontFamiliesExW.argtypes = [W.HDC, ctypes.POINTER(LOGFONTW), PROC, W.LPARAM, W.DWORD]
+    lf = LOGFONTW()
+    lf.lfCharSet = charset
+    lf.lfFaceName = face[:31]
+    g.EnumFontFamiliesExW(dc, ctypes.byref(lf), proc, 0, 0)
+    return out
+
+
+def list_styles():
+    """入っているフォントを (書体名, 太さ, 斜体, 文字セット) で全部挙げる（縦書き用の @ つきと、輪郭の無いビットマップフォントは除く）。
+    1 つの書体名に太さ違い・斜体が入っている場合（游ゴシック の Bold など）も 1 つずつ挙げる"""
     g = _gdi()
     user = ctypes.windll.user32
     user.GetDC.restype = W.HDC
     user.GetDC.argtypes = [W.HWND]
     user.ReleaseDC.argtypes = [W.HWND, W.HDC]
-    names = set()
-    PROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.POINTER(LOGFONTW), ctypes.c_void_p, W.DWORD, W.LPARAM)
-
-    def cb(lf, _tm, _typ, _lp):
-        nm = lf.contents.lfFaceName
-        if nm and not nm.startswith("@"):
-            names.add(nm)
-        return 1
-
-    proc = PROC(cb)
-    g.EnumFontFamiliesExW.argtypes = [W.HDC, ctypes.POINTER(LOGFONTW), PROC, W.LPARAM, W.DWORD]
     dc = user.GetDC(None)
-    lf = LOGFONTW()
-    lf.lfCharSet = charset
-    g.EnumFontFamiliesExW(dc, ctypes.byref(lf), proc, 0, 0)
-    user.ReleaseDC(None, dc)
-    return sorted(names)
+    try:
+        fams = {}
+        for face, _w, _i, cs, typ, _full in _enum(dc, g, "", DEFAULT_CHARSET):
+            if not face or face.startswith("@") or (typ & 1):         # RASTER_FONTTYPE（輪郭の無いビットマップフォント）は除く
+                continue
+            fams.setdefault(face, set()).add(cs)
+        styles = []
+        for face in sorted(fams):
+            cs = SHIFTJIS_CHARSET if SHIFTJIS_CHARSET in fams[face] else DEFAULT_CHARSET
+            seen = set()
+            for f2, w, it, _cs, typ, _full in _enum(dc, g, face, DEFAULT_CHARSET):
+                if f2 != face or (w, it) in seen:
+                    continue
+                seen.add((w, it))
+                styles.append((face, w, it, cs))
+            if not seen:
+                styles.append((face, 0, False, cs))
+        return styles
+    finally:
+        user.ReleaseDC(None, dc)
 
 
-def identify(ts1, font_id=None, faces=None, progress=None):
-    """ts1 の字形と完全に一致するフォントを、入っているフォントの中から探す → [(書体名, y_shift), ...]"""
-    hits = []
-    faces = faces or list_faces()
-    for i, face in enumerate(faces):
+def list_faces(charset=DEFAULT_CHARSET):
+    """入っているフォントの書体名（縦書き用の @ つきは除く）"""
+    return sorted({s_[0] for s_ in list_styles()})
+
+
+def installed_signature():
+    """入っているフォントの一覧の指紋（フォントを足したり消したりすると変わる）"""
+    import hashlib
+    h = hashlib.sha1()
+    for s_ in list_styles():
+        h.update(repr(s_).encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+def identify(ts1, font_id=None, faces=None, progress=None, first_only=False, only=None):
+    """ts1 の字形と 1 点残らず一致するフォントを、入っているフォント全部（全部の太さ・斜体）から探す。
+    → [{"face", "weight", "italic", "charset", "y_shift", "header_ok", "postscript", "family", "full"}, ...]
+    輪郭が同じフォントが複数あるときは、字幅などヘッダまで同じものだけを返す（それでも複数なら、この文言の字では区別できない）
+    faces = 先に試す書体名（名前が分かっているとき）。only = この書体名だけを調べる。全部を調べても 1 秒ほど"""
+    glyphs = ref_glyphs(ts1, font_id)
+    if not glyphs or not available():
+        return []
+    styles = list_styles()
+    if only is not None:
+        styles = [s_ for s_ in styles if s_[0] in only]
+    if faces:
+        want = [f for f in faces if f]
+        styles.sort(key=lambda s_: (s_[0] not in want, s_[0]))
+    hits, seen = [], set()
+    for i, (face, weight, italic, cs) in enumerate(styles):
         if progress:
-            progress(i, len(faces), face)
+            progress(i, len(styles), face)
         try:
-            s = measure_shift(ts1, face, font_id=font_id)
+            with GdiFont(face, weight, cs, italic) as f:
+                if not f.matched():
+                    continue
+                sh = match_font(f, glyphs)
+                if sh is None:
+                    continue
+                nm = f.names()
+                # 字幅（A・B・C）や黒枠などヘッダまで同じか。輪郭が同じ兄弟フォント（等幅版とプロポーショナル版など）の区別に使う
+                hdr = 0
+                for g in glyphs:
+                    g2 = Glyph(g.code, g.font_id, g.usage, convert(f.native(g.code)[0], sh), f.ascent, f.descent)
+                    hdr += build_header(g2, f.abc(g.code), f.blackbox(g.code)) == g.header_raw
         except Exception:
-            s = None
-        if s is not None:
-            hits.append((face, s))
+            continue
+        key = (face, nm.get("postscript"))
+        if key in seen:        # 同じフォントが太さ違いの指定でも選ばれることがある
+            continue
+        seen.add(key)
+        hits.append({"face": face, "weight": weight, "italic": italic, "charset": cs, "y_shift": sh,
+                     "header_ok": hdr == len(glyphs), **nm})
+        if first_only:
+            break
+    if any(h["header_ok"] for h in hits):      # ヘッダまで同じものがあれば、それだけ残す
+        hits = [h for h in hits if h["header_ok"]]
     return hits
 
 
 if __name__ == "__main__":
     import os
+    import time
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from ts1core import TS1
     t = TS1(open(sys.argv[1], "rb").read())
-    fids = sorted({g.font_id for g in t.glyphs if g.code and g.contours})
+    fids = sorted({g.font_id for g in ref_glyphs(t)})
     for fid in fids:
-        print(f"フォント番号 {fid} (0x{fid:X}):")
-        for face, s in identify(t, fid, faces=sys.argv[2:] or None):
-            print(f"   一致: {face}  ずれ {s}  {compare(t, face, s, font_id=fid)}")
+        t0 = time.time()
+        hits = identify(t, fid, faces=sys.argv[2:] or None)
+        print(f"フォント番号 {fid} (0x{fid:X}): {len(ref_glyphs(t, fid))} 字で照合、{time.time() - t0:.1f} 秒")
+        for h in hits:
+            print(f"   一致: {h['face']}  太さ {h['weight']}  PostScript 名 {h.get('postscript')}  縦位置のずれ {h['y_shift']}")
+        if not hits:
+            print("   1 点残らず一致するフォントは入っていません")

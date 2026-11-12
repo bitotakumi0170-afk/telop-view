@@ -163,6 +163,22 @@ VWS は Windows の `GetGlyphOutlineW(GGO_NATIVE)`（em 2048）から字形を�
 5 本は「実験①」〜「実験⑤」で、違いは最後の 1 字と保存時刻・履歴だけ。型が見本と違う（`CSSL` / `RUCH` / `USCU` / `MSCR` ほか。FORMAT.md「1 行もの（CSSL）の型」）。
 フォント番号 1121 = ニューロダン Pro EB、150px、白文字・縁なし。画像は無いので、見た目は第 2 回の確認用（19・20）で確かめる。
 
+## フォントの特定を自動に（2026-11-13。ユーザーの希望「ts1 からフォントの特定は必ずできるようにしたい」）
+
+ユーザーから「見本のフォントはロダン B ではなくニューロダン B だった」と確認があった（こちらの特定 1119 = ニューロダン Pro B と一致）。
+
+- .ts1 を読むたびに、中の全フォント番号を自動で特定して `フォント表.json` に書く（`run.resolve_font`。`to-ps` / `text` / `info` / `to-ts1` / `identify`）
+- 方法は FORMAT.md「.ts1 からフォントを特定する方法」。Windows の全フォント・全太さ（1,327 通り）と 1 点残らず照合して 1 秒弱
+- 「フォントを特定する.bat」（`identify`）は、結果を詳しく見たいとき・PC に無いフォントの候補を形の近さで出したいとき用になった
+- 字形が同じ兄弟フォント（Pro / ProN など）は「候補が N つ」と正直に出し、同じ番号の別の .ts1 を読むたびに絞る
+- 見つからなかった結果も、入っているフォントの一覧の指紋（`scan_sig`）と一緒に覚え、フォントを入れ直すまでは探し直さない
+- 分かっている番号は `run.KNOWN_FONTS` に持つ（フォント表が空でも名前が出る）: 1119 = ニューロダン B、1121 = ニューロダン EB
+- PC に無いフォントは `python run.py font-name 番号 名前` で手で登録できる
+- 試験: PC の日本語フォント延べ 120 個（60 個 × 2 回）で字形を作って当てさせ、外れ 0（1 つに特定 88、兄弟 2 つ 29、対象外 3）
+
+残る限界: フォントが PC に無く、ODTT も登録も無い番号は名前が出せない。VWS の端末でこのツールを動かせれば必ず確定する
+（黒い窓は出ない作りにしてある）。
+
 ## VWS 確認用の一式・第 2 回（ユーザーに VWS で開いてもらう）
 
 `python vwstest.py make 見本.ts1 出力フォルダ 実験①.ts1` で `作業例\VWS確認用_第2回\` に 10 本作った（zip も同じ場所）:
@@ -209,12 +225,10 @@ VWS で同じ文言のまま設定を 1 つだけ変えて別名保存した .ts
 - PC の作業用フォルダ: `C:\Users\bitot\tools\telop\VWSフォトショブリッジツール\`（`ts1lab` はリポジトリの `ts1lab/` へのジャンクション。
   `テンプレート.ts1` と `作業例\見本.ts1` はユーザーがチャットに添付した見本）
 
-`フォント表.json` の初期内容（`file`・`face`・`y_shift` などは使ったときに自動で書き足される）:
-
-```json
-{"1119": {"name": "ニューロダン B", "hints": [["ニューロダン", "B"], ["NewRodin", "B"]]},
- "1121": {"name": "ニューロダン EB", "hints": [["ニューロダン", "EB"], ["NewRodin", "EB"]]}}
-```
+`フォント表.json` は空（`{}`）で始めてよい。.ts1 を読むたびに自動で書き足される（分かっている番号は `run.KNOWN_FONTS` にも入っている）。
+主な項目: `name` 表示名 / `face` Windows の書体名 / `weight` 太さ / `postscript` PostScript 名 / `y_shift` 縦位置のずれ /
+`exact` 字形が 1 点残らず一致したか / `same_shape` 区別できていない兄弟フォント / `in_file` 名前が .ts1 の中にある /
+`scan_sig` 見つからなかったときのフォント一覧の指紋 / `file`・`scale`・`ox`・`oy` フォントファイルと実測値（Photoshop 側の位置合わせ用）。
 
 `設定.json` の初期内容:
 
@@ -229,7 +243,8 @@ VWS で同じ文言のまま設定を 1 つだけ変えて別名保存した .ts
 pip install -r requirements.txt
 python run.py to-ps  見本.ts1        # → 見本_再現.png / 見本_画像レイヤ.psd / 見本_Photoshop用.jsx
 python run.py to-ts1 テロップ.psd     # → テロップ_VWS用.ts1 / テロップ_確認.png
-python run.py identify 見本.ts1      # 字形から PC 内のフォントを特定して フォント表.json に登録
+python run.py identify 見本.ts1      # フォントの特定結果を詳しく表示（特定そのものは to-ps / text / info でも自動で行う）
+python run.py font-name 1234 "フォント名"   # PC に無いフォントの番号に名前を手で登録
 python run.py info 見本.ts1          # 概要 + 見本_構造.txt
 python run.py diff A.ts1 B.ts1       # 項目単位の差分
 python ts1tool.py selftest 見本.ts1  # 健全性チェック
