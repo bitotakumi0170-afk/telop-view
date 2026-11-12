@@ -542,7 +542,7 @@ class TS1:
                 clear_history=False, keep_glyph_header=True, edge_width=None, color_order=COLOR_ORDER):
         """テンプレート（self）の構造を保ったまま、文字列・グリフ・位置・色を差し替えて書き出す"""
         b = self.data
-        changed = chars is not None or glyphs is not None or pos is not None
+        changed = chars is not None or glyphs is not None or pos is not None or edge_width is not None
         chars = self.chars if chars is None else chars
         glyphs = self.glyphs if glyphs is None else glyphs
         old_ng = len(self.glyphs)

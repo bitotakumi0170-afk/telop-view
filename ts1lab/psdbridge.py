@@ -173,7 +173,13 @@ var EXACT = false;
   dup.name = "VWSの見た目（正確な画像・編集不可）";
   dup.visible = true;
   lay.name = "編集用テキスト：" + lay.name;
-  lay.visible = false;
+  // レイヤーカンプ（ウィンドウ > レイヤーカンプ）で 2 つの見え方をワンクリックで切り替えられるようにする
+  dup.visible = false; lay.visible = true;
+  doc.layerComps.add("② テキスト編集（Photoshop の文字）", "文字を直すときはこちら。直したら「3_PSDをTS1に変換」へ", false, false, true);
+  dup.visible = true; lay.visible = false;
+  // ※ add() の戻り値に apply() すると、先に登録したカンプが適用されてしまう（Photoshop 2027 で確認）。
+  //    登録時点でこの見え方になっているので apply はしない
+  doc.layerComps.add("① VWSの見た目（正確な画像）", "VWS で表示される絵そのもの。編集はできません", false, false, true);
   EXACT = true;
 })();
 
@@ -182,7 +188,7 @@ var out = new File(here + "/" + SPEC.name + ".psd");
 var opt = new PhotoshopSaveOptions(); opt.layers = true;
 doc.saveAs(out, opt, true);
 alert("保存しました: " + out.fsName + "\nフォント: " + FONT +
-      (EXACT ? "\n\n上のレイヤ = VWS の見た目そのものの画像です。\n文字を直すときは、上の画像レイヤを非表示にして「編集用テキスト」を表示・編集し、\nその PSD を「3_PSDをTS1に変換」に入れてください。" : ""));
+      (EXACT ? "\n\n今の表示 = VWS の見た目そのものの画像です。\n文字を直すときは [ウィンドウ] > [レイヤーカンプ] で「② テキスト編集」に切り替えて編集し、\nその PSD を「3_PSDをTS1に変換」に入れてください。" : ""));
 """
 
 

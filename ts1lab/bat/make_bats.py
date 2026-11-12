@@ -14,7 +14,10 @@ BATS = {
     "4_TS1の文字を打ち替える.bat": ("text", ".ts1 をこの bat にドラッグ＆ドロップしてください（新しい文言を聞かれます）"),
     "フォントを特定する.bat": ("identify", ".ts1 をこの bat にドラッグ＆ドロップしてください（PC のフォントと字形を照合します）"),
     "中身を見る.bat": ("info", ".ts1 をこの bat にドラッグ＆ドロップしてください"),
+    "VWS確認用の一式を作る.bat": ("vws-make", ".ts1 をこの bat にドラッグ＆ドロップしてください（条件を 1 つずつ変えた確認用 .ts1 を作ります）"),
+    "VWSの書き出しと照合する.bat": ("vws-check", "VWS の書き出し PNG を入れたフォルダをこの bat にドラッグ＆ドロップしてください"),
 }
+VWSTEST = r'python "%~dp0ts1lab\vwstest.py"'
 
 
 def main():
@@ -27,8 +30,11 @@ def main():
                       "if errorlevel 1 (echo. & echo ※ 失敗しました。Python 3 が入っているか確認してください) else (echo. & echo セットアップ完了)"]
         else:
             # text は 1 ファイルだけ（文言は run.py が入力を求める）
-            lines += [f'if "%~1"=="" (echo {hint} & pause & exit /b 1)',
-                      f'{RUN} {cmd} "%~1"' if cmd == "text" else f"{RUN} {cmd} %*"]
+            if cmd.startswith("vws-"):
+                line = f'{VWSTEST} {cmd[4:]} "%~1"'
+            else:
+                line = f'{RUN} {cmd} "%~1"' if cmd == "text" else f"{RUN} {cmd} %*"
+            lines += [f'if "%~1"=="" (echo {hint} & pause & exit /b 1)', line]
         lines += ["echo.", "pause"]
         with open(os.path.join(out, name), "w", encoding="utf-8", newline="\r\n") as f:
             f.write("\n".join(lines) + "\n")

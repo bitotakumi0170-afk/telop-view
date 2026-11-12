@@ -145,7 +145,7 @@ def cmd_selftest(a):
     t2 = TS1(t.rebuild(chars=chars, glyphs=glyphs))
     check("同じ文言で組み直し → 文字列が一致", t2.text == t.text)
     check("同じ文言で組み直し → 字間が一致", t2.spacings()[:len(t.text)] == t.spacings()[:len(t.text)])
-    bb = t.ink_bbox()
+    bb = t.ink_bbox(edge=(t.edge_width() or 6) + 1)  # ファイルの縁幅で計算（縁 6px 決め打ちだと縁を変えた .ts1 が NG になる）
     check(f"推定レイアウトの描画範囲 {tuple(round(v) for v in bb)} が OFRI {t.ofri_bbox} と ±3px 以内",
           all(abs(x - y) <= 3 for x, y in zip(bb, t.ofri_bbox)))
     sys.exit(0 if ok else 1)
