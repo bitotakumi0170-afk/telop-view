@@ -137,6 +137,8 @@ class Dumper:
         for tag in ("OFRI", "OOCI", "OOCO"):
             o = self.simple(f"SWRK/{tag}", o)
         o = self.omr0("SWRK/OMR0", o)
+        if b[o:o + 4] == b"ODTT":
+            o = self.odtt("SWRK/ODTT", o)
         o = self.ormp("SWRK/ORMP", o)
         o, n = self.eset("SWRK", o)
         for i in range(n):
@@ -159,6 +161,23 @@ class Dumper:
             act, p = read_str(b, p)
             t = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             self.add(f"{path}/[{i}]", s, p - s, "entry", f"{eid} {t} {user} | {act[:60]}")
+        return o + size
+
+    def odtt(self, path, o):
+        """フォント表（内蔵番号でないフォントを使うときだけある）"""
+        b = self.b
+        _, size = self.hdr(path, o, "ODTT")
+        n = struct.unpack_from("<H", b, o + 12)[0]
+        self.fields(path, o + 8, o + 14, [("ver", "u16", ""), ("zero", "u16", ""), ("count", "u16", "フォント数")])
+        p = o + 14
+        for i in range(n):
+            fp = f"{path}/[{i}]"
+            p = self.fields(fp, p, p + 16, [("font_id", "u32", "フォント番号（ACTP / RCHR と同じ値）"), ("weight", "u32", "太さ (700 = Bold)"),
+                                             ("f0", "u8", ""), ("pitch_family", "u8", "0x12 ピッチと系統?"), ("f2", "u8", ""),
+                                             ("charset", "u8", "文字セット (0x80 = 日本語)"), ("f4", "b4", "")])
+            for nm, note in (("name", "書体名"), ("postscript", "PostScript 名")):
+                st, q = read_str(b, p)
+                p = self.add(fp, p, q - p, nm, st, note)
         return o + size
 
     def ormp(self, path, o):
@@ -294,9 +313,9 @@ class Dumper:
         p = o + 12
         for i in range(n):
             self.fields(f"{path}/[{i}]", p, p + 50, [
-                ("kind", "u32", "0 = 文字面 / 9 = 縁"), ("color_res", "u32", "色リソース番号"),
-                ("zero", "b20", ""), ("order", "u32", "描画順? (面 5 / 縁 4)"), ("u8a", "u8", ""),
-                ("enable", "u8", "有効? (1)"), ("width", "u32", "太さ px"), ("width2", "u32", "太さ 2 px"), ("zero2", "b8", "")])
+                ("kind", "u32", "0 = 文字面 / 9 = 縁 / 1 = 影"), ("color_res", "u32", "色リソース番号"),
+                ("zero", "b20", ""), ("order", "u16", "不明 (4 か 5)"), ("extra", "u16", "太さへの追加分 px（外へ広がる量 = 太さ + これ）"),
+                ("u8a", "u8", ""), ("enable", "u8", "1 = 有効 / 0 = 無効"), ("width", "u32", "太さ px"), ("width2", "u32", "太さ 2 px"), ("zero2", "b8", "")])
             p += 50
         if p < o + size:
             self.add(path, p, o + size - p, "rest", None, "未解明")

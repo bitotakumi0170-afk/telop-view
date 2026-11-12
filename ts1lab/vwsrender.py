@@ -50,9 +50,10 @@ def _subdivide(p0, c, p1, out, depth=0):
     _subdivide(r, q1, p1, out, depth + 1)
 
 
-def glyph_polys8(glyph, sc8):
-    """字形の輪郭 → 8 倍格子の整数の多角形（字の原点からの相対）"""
-    P = lambda p: (int(p[0] * sc8), int(p[1] * sc8))
+def glyph_polys8(glyph, sx8, sy8=None):
+    """字形の輪郭 → 8 倍格子の整数の多角形（字の原点からの相対）。sx8, sy8 = 2048 単位 → 8 倍格子の倍率（横・縦）"""
+    sy8 = sx8 if sy8 is None else sy8
+    P = lambda p: (int(p[0] * sx8), int(p[1] * sy8))
     polys = []
     for c in glyph.contours:
         cur = c.start
@@ -135,7 +136,7 @@ def face_counts(ts1, canvas=(1920, 1080)):
         x0 = first_x.setdefault(round(y, 3), x)                 # 行の先頭字
         g8x = int(math.floor((x0 + (x - x0) * ADVANCE_SCALE) * SS + 0.5))
         g8y = int(math.floor(y * SS + 0.5))
-        polys = glyph_polys8(g, sc * SS)
+        polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS)
         xs = [p[0] for pl in polys for p in pl]
         ys = [p[1] for pl in polys for p in pl]
         # 字ごとの窓（画素単位）
@@ -150,7 +151,7 @@ def face_counts(ts1, canvas=(1920, 1080)):
         k[:-1] += m[1:]                                                    # 上下 2 ライン
         # 上端: 字の上端（8 倍格子）を整数行に丸め、その 1 行上から描く。それより上にはみ出す行は切る
         top8 = g8y + min(ys)
-        first_row = (top8 + SS // 2) // SS - 1
+        first_row = (top8 + SS // 2 - 1) // SS - 1   # = ceil(上端px - 0.5) - 1。端数 .5 ちょうどは切らない（別サンプルの OFRI で確認）
         if first_row - py0 > 0:
             k[:first_row - py0] = 0
         # キャンバスへ（字どうしが重なる所は大きい方）

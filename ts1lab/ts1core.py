@@ -104,6 +104,15 @@ class Glyph:
             return (0, 0, 0, 0)
         return (min(xs), -min(ys), max(xs), -max(ys))
 
+    def advance_units(self):
+        """送り幅（2048 単位）= ABC 幅の合計 A + B + C。全角は 2048、専用空白 U+E73E は 512"""
+        h = self.header_raw
+        if h and len(h) >= 56:
+            a_, b_, c_ = struct.unpack_from("<iii", h, 44)
+            if a_ + b_ + c_ > 0:
+                return a_ + b_ + c_
+        return CELL
+
     def build_header(self) -> bytes:
         l, t, r, btm = self.bbox()
         if not self.contours:
@@ -260,6 +269,15 @@ def encode_color(rgba, order=COLOR_ORDER):
     return bytes([r, g, b, a]) if order == "RGBA" else bytes([b, g, r, a])
 
 
+class Scale(float):
+    """2048 単位 → px の倍率。float としては縦の倍率。横と縦が違うとき（長体・平体）は .sx / .sy"""
+    def __new__(cls, sx, sy=None):
+        sy = sx if sy is None else sy
+        o = float.__new__(cls, sy)
+        o.sx, o.sy = float(sx), float(sy)
+        return o
+
+
 class TS1:
     """サンプル構造に沿ったパーサ。未解明部分は生バイトのまま保持し、再構築時に再利用する。"""
 
@@ -285,6 +303,7 @@ class TS1:
                 break
             p += s
         self._parse_ofri()
+        self._parse_fonts()
         self._parse_history()
         self._parse_ormp()
         self._parse_layer()
@@ -294,6 +313,33 @@ class TS1:
         o = self.off["OFRI"]
         self.ofri_bbox_off = o + 0x24
         self.ofri_bbox = tuple(i32(self.data, self.ofri_bbox_off + 4 * k) / FIX for k in range(4))
+
+    # -- ODTT: フォント表（内蔵番号でないフォントを使うときだけある） ------------
+    def _parse_fonts(self):
+        """ODTT = u16 ver, u16 0, u16 件数, [u32 フォント番号, u32 太さ(700 など), 8B (+1: 0x12 ピッチと系統?, +3: 0x80 = 日本語の文字セット),
+        文字列 書体名, 文字列 PostScript 名]…。見本（内蔵番号 1119）には無い。番号の決め方は不明（名前の CRC32/FNV/MD5 などではない）"""
+        self.fonts = []
+        o = self.off.get("ODTT")
+        if o is None:
+            return
+        b = self.data
+        _, s_ = chunk_at(b, o)
+        n = u16(b, o + 12)
+        p = o + 14
+        for _ in range(n):
+            fid, weight = struct.unpack_from("<II", b, p)
+            flags = bytes(b[p + 8:p + 16])
+            name, p = read_str(b, p + 16)
+            ps, p = read_str(b, p)
+            self.fonts.append({"font_id": fid, "weight": weight, "flags": flags.hex(), "charset": flags[3], "name": name, "postscript": ps})
+        assert p == o + s_, "ODTT の長さ不一致"
+
+    def font_name(self, font_id=None):
+        fid = self.font_id if font_id is None else font_id
+        for f in getattr(self, "fonts", []):
+            if f["font_id"] == fid:
+                return f
+        return None
 
     # -- OMR0: 編集履歴 -----------------------------------------------------
     def _parse_history(self):
@@ -357,6 +403,7 @@ class TS1:
             return []
         n = u16(p, 2)
         out = []
+        roles = {0: ("face", "文字面"), 9: ("edge", "縁"), 1: ("shadow", "影")}
         for k in range(n):
             e = 4 + 50 * k
             if e + 42 > len(p):
@@ -364,24 +411,32 @@ class TS1:
             kind, res = u32(p, e), u32(p, e + 4)
             t, raw = self.resources[res] if res < len(self.resources) else (None, None)
             color = decode_color(raw, order) if t == "CRGB" else None
+            role, role_ja = roles.get(kind, ("other", f"種別 {kind}"))
             out.append({
                 "index": k,
                 "kind": kind,
-                "role": "face" if kind == 0 else "edge",
-                "role_ja": "文字面" if kind == 0 else "縁",
+                "role": role,
+                "role_ja": role_ja,
                 "color_resource": res,
                 "color": color,
                 "color_hex": ("#%02X%02X%02X" % color[:3]) if color else None,
                 "opacity": round(color[3] / 255 * 100, 1) if color else None,
-                "order": u32(p, e + 28),
+                "order": u16(p, e + 28),
+                "extra": u16(p, e + 30),        # 太さへの追加分（別サンプル: 縁 3 + 追加 3 = 6px 広がる）
+                "enabled": bool(p[e + 33]),     # 0 = 無効（別サンプルの 1 件目の文字面）
                 "width": u32(p, e + 34),
                 "width2": u32(p, e + 38),
+                "reach": u32(p, e + 34) + u16(p, e + 30),   # 外側へ広がる量 px
                 "offset": e,
             })
         return out
 
     def face_color(self, order=COLOR_ORDER):
-        for d in self.decorations(order):
+        ds = self.decorations(order)
+        for d in ds:   # 有効な文字面を優先（無効な文字面が先に並ぶことがある）
+            if d["role"] == "face" and d["color"] and d["enabled"]:
+                return d["color"]
+        for d in ds:
             if d["role"] == "face" and d["color"]:
                 return d["color"]
         c = self.colors(order)
@@ -461,7 +516,14 @@ class TS1:
         """縁の太さ px（ADCO の縁エントリ）。サンプルは 6（見本画像で確認済）"""
         for d in self.decorations():
             if d["role"] == "edge":
-                return d["width"]
+                return d["reach"] if d["enabled"] else 0
+        return None
+
+    def shadow(self):
+        """影（種別 1）の装飾。無ければ None。別サンプルでは縁の外に右下へ約 8px（太さ 4 + 追加 4）広がる（描画は未検証）"""
+        for d in self.decorations():
+            if d["role"] == "shadow" and d["enabled"]:
+                return d
         return None
 
     def spacings(self):
@@ -475,26 +537,41 @@ class TS1:
         return out
 
     # -- レイアウト ----------------------------------------------------------
+    def magnifications(self):
+        """各文字の倍率 (横 %, 縦 %)。ACMG が無い文字は直前の値を引き継ぐ（別サンプルで確認: 「さん」だけ 85%）"""
+        cur, out = (100.0, 100.0), []
+        for ch in self.chars:
+            p = ch.attrs.get("ACMG")
+            if p is not None:
+                cur = (i32(p, 2) / FIX, i32(p, 6) / FIX)
+            out.append(cur)
+        return out
+
     def layout(self, newline_code=0x0D):
         """各文字の配置を返す: [(Char, Glyph, x原点, ベースラインy, scale)]
+        scale は 2048 単位 → px の倍率（Scale: float。横と縦が違うときは .sx / .sy を見る）
 
-        見本画像（VWS 出力）との照合で確認したルール
-          - 文字送り = 文字サイズ（全角セル）
-          - ACSP（字間）は「その文字の直前」の間隔に効く（1 文字目の ACSP は無視）
-          - 行は CSML の x から幅 CSTR.width の枠内で中央揃え
-          - CSML の y がベースライン（複数行の扱いは未確認）
+        確認したルール（見本 = VWS 出力画像と画素単位で照合 / 別サンプル = OFRI の描画範囲と照合）
+          - 文字送り = 字形の (A + B + C) / 2048 × 文字サイズ × 横倍率。全角は 2048、専用空白 U+E73E は 512
+          - ACMG（倍率 %）は字形も送りも縮める（左・ベースライン基準）。指定が無い文字は直前の値を引き継ぐ
+          - ACSP（字間）は「その文字の直前」の間隔に効く（行頭の ACSP は無視）。指定が無い文字は直前の値を引き継ぐ
+          - 改行は U+000D（空の字形を持つ）。行送り = 文字サイズ + ALSP（行間）
+          - 各行は CSML の x から幅 CSTR.width の枠内で中央揃え。CSML の y は最終行のベースライン
         """
         size_w, size_h = self.char_size
         sp = self.spacings()
+        mg = self.magnifications()
         glyphs = self.glyphs
         lines, cur = [], []
-        for ch, s in zip(self.chars, sp):
+        for ch, s_, m_ in zip(self.chars, sp, mg):
             if ch.code == 0:
                 continue
             if ch.code in (0x0A, newline_code):
                 lines.append(cur); cur = []
                 continue
-            cur.append((ch, s))
+            g = glyphs[ch.glyph_index]
+            adv = g.advance_units() / CELL * size_w * m_[0] / 100
+            cur.append((ch, g, s_, m_, adv))
         lines.append(cur)
         x0, y0 = self.pos
         bw, _ = self.box
@@ -503,14 +580,14 @@ class TS1:
         for li, line in enumerate(lines):
             if not line:
                 continue
-            width = len(line) * size_w + sum(s for _, s in line[1:])
+            width = sum(c[4] for c in line) + sum(c[2] for c in line[1:])
             x = x0 + (bw - width) / 2
             y = y0 - (len(lines) - 1 - li) * pitch
-            for k, (ch, s) in enumerate(line):
+            for k, (ch, g, s_, m_, adv) in enumerate(line):
                 if k:
-                    x += size_w + s
-                g = glyphs[ch.glyph_index]
-                out.append((ch, g, x, y, size_w / CELL))
+                    x += s_
+                out.append((ch, g, x, y, Scale(size_w / CELL * m_[0] / 100, size_h / CELL * m_[1] / 100)))
+                x += adv
         return out
 
     # -- 情報 ---------------------------------------------------------------
@@ -525,6 +602,7 @@ class TS1:
             "char_size": self.char_size,
             "line_spacing": self.line_spacing,
             "font_id": self.font_id,
+            "fonts": getattr(self, "fonts", []),
             "face_color": "#%02X%02X%02X" % self.face_color(color_order)[:3],
             "edge_color": "#%02X%02X%02X" % self.edge_color(color_order)[:3],
             "edge_width": self.edge_width(),
@@ -614,7 +692,8 @@ class TS1:
 
         # ---- SWRK
         sw = 0x10
-        mid = b[sw + 8:om] + omr0 + ormp_chunk + b[o + u32(b, o + 4):s]
+        between = b[om + u32(b, om + 4):o]          # OMR0 と ORMP の間（ODTT = フォント表があればここ）
+        mid = b[sw + 8:om] + omr0 + between + ormp_chunk + b[o + u32(b, o + 4):s]
         swrk_body = mid + slyr
         swrk = b"SWRK" + struct.pack("<I", 8 + len(swrk_body)) + swrk_body
         tsrc_body = b[8:sw] + swrk
@@ -634,7 +713,8 @@ class TS1:
             if not g.contours:
                 continue
             l, t, r, btm = g.bbox()
-            xs0.append(x + l * sc); xs1.append(x + r * sc)
+            sx = getattr(sc, "sx", sc)
+            xs0.append(x + l * sx); xs1.append(x + r * sx)
             ys0.append(y - t * sc); ys1.append(y - btm * sc)
         if not xs0:
             return None
