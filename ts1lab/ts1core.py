@@ -925,6 +925,10 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
     index = {c: i for i, c in enumerate(order)}
 
     first = template.chars[0]
+    last = template.chars[-1] if template.chars and template.chars[-1].code == 0 else None
+    # 行頭の字間（ACSP）は並べ方に効かないので、雛形の値をそのまま残す（VWS が書いた値を変えない）。
+    # ただし書かれていない字は直前の値を引き継ぐので、2 字目は「雛形の行頭の値」と違えば必ず書く
+    prev = first.spacing() if spacing is not None else None
     chars = []
     for i, c in enumerate(codes):
         if i == 0:
@@ -933,14 +937,19 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                 attrs["ACSZ"] = struct.pack("<Hii", 1, fx(size[0]), fx(size[1]))
             if font_id is not None and "ACTP" in attrs:
                 attrs["ACTP"] = struct.pack("<HI", 1, font_id)
-            if spacing is not None and "ACSP" in attrs:
-                attrs["ACSP"] = struct.pack("<Hi", 1, fx(spacing[0]))
+            if spacing is not None and "ACSP" not in attrs:
+                prev = 0.0
             chars.append(Char(c, index.get(c, 0), attrs, order_t, uscu=first.uscu))
         elif c == 0:
-            chars.append(Char(0, 0, uscu=first.uscu))
-        elif spacing is not None and i < len(spacing) and (spacing[i] != spacing[i - 1] or spacing[i] != 0):
+            # 終端は雛形の終端をそのまま使う（字間などが付いていることがある）
+            if last is not None:
+                chars.append(Char(0, 0, dict(last.attrs), list(last.attr_order), last.pre_raw, first.uscu))
+            else:
+                chars.append(Char(0, 0, uscu=first.uscu))
+        elif spacing is not None and i < len(spacing) and (spacing[i] != prev or spacing[i] != 0):
             # 字間が変わる文字・0 以外の文字には ACSP を明示（「その文字だけ」「以降継続」どちらの解釈でも同じ結果になる）
             chars.append(Char(c, index.get(c, 0), {"ACSP": struct.pack("<Hi", 1, fx(spacing[i]))}, ["ACSP"], uscu=first.uscu))
+            prev = spacing[i]
         else:
             chars.append(Char(c, index.get(c, 0), uscu=first.uscu))
     return chars, glyphs

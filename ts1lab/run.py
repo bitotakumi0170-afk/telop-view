@@ -416,6 +416,11 @@ def to_ts1(cfg, path):
     from psdbridge import psd_to_ts1, read_psd_text, ts1_to_png
     base = os.path.splitext(path)[0]
     tmpl_path = resolve(cfg, cfg.get("template", "テンプレート.ts1"))
+    # PSD と同じ名前の .ts1 が隣にあれば（= その .ts1 から作った PSD）、それを雛形にする。
+    # 型（枠つき / 1 行もの）・縁の有無・イン/アウトの設定などが元のまま戻る
+    if os.path.exists(base + ".ts1"):
+        tmpl_path = base + ".ts1"
+        print(f"  雛形: 隣にある {os.path.basename(tmpl_path)}（元の .ts1）を使います")
     with open(tmpl_path, "rb") as f:
         tmpl = TS1(f.read())
     info = read_psd_text(path)
