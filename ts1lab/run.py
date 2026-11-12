@@ -58,6 +58,8 @@ KNOWN_FONTS = {
              "hints": [["ニューロダン", "L"], ["NewRodin", "L"]]},
     "1115": {"name": "ニューロダン M", "face": "FOT-ニューロダン Pro M", "postscript": "NewRodinPro-M", "weight": 500,
              "hints": [["ニューロダン", "M"], ["NewRodin", "M"]]},
+    # 1117 も VWS の表示は「ニューロダンB」（1119 と同じ名前。どの Windows のフォントに当たるかは、字形つきの .ts1 が無く未確認）
+    "1117": {"name": "ニューロダン B（番号 1117）", "hints": [["ニューロダン", "B"], ["NewRodin", "B"]]},
     "1123": {"name": "ニューロダン UB", "face": "FOT-ニューロダン Pro UB", "postscript": "NewRodinPro-UB", "weight": 900,
              "hints": [["ニューロダン", "UB"], ["NewRodin", "UB"]]},
 }
