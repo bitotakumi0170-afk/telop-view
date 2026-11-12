@@ -527,6 +527,8 @@ def retype(cfg, path, text=None):
     if not text:
         print("  文言が空なので中止しました")
         return
+    if t.kind == "CSSL" and "\n" in text:
+        raise RuntimeError("この .ts1 は枠なしの 1 行ものです。改行は入れられません（この型が 2 行を持てるか確かめられていないため）")
     e = font_for_id(cfg, t.font_id, t)
     font = None
     have = {g.code for g in t.glyphs}

@@ -204,6 +204,61 @@ def compare(t, png_path):
     return best
 
 
+def diagnose(t, png_path, org):
+    """合わなかったときの見当をつける: 文字面だけなら合うか / 縁のずらし量の円はどこまでか"""
+    ref = np.asarray(Image.open(png_path).convert("RGBA")).astype(int)
+    H, W = ref.shape[:2]
+    ox, oy = org
+    kfull = vwsrender.face_counts(t)
+    al = np.zeros(kfull.shape, int)
+    al[oy:oy + H, ox:ox + W] = ref[..., 3]
+    edge = int(t.edge_width() or 0)
+    notes = []
+    if not edge:
+        mine = np.minimum(255, 2 * kfull)
+        notes.append(f"縁なし: 文字面のアルファの違い {int((mine != al).sum())} 画素")
+        return notes
+    # 文字面（縁が不透明な所の色）だけ比べる
+    F = np.array(t.face_color()[:3]); E = np.array(t.edge_color()[:3])
+    ch = int(np.argmax(np.abs(F - E)))
+    full = np.zeros(kfull.shape + (4,), int)
+    full[oy:oy + H, ox:ox + W] = ref
+    a = np.minimum(255, 2 * kfull)
+    mine = (E[ch] * 256 + (F[ch] - E[ch]) * (a + 1)) >> 8
+    inner = (al == 255) & (kfull > 0)
+    notes.append(f"文字面の色（縁が不透明な所）の違い {int((mine[inner] != full[..., ch][inner]).sum())} / {int(inner.sum())} 画素")
+    # 縁: ずらしたコピーが VWS のアルファを超えないずらし量だけが「許される」
+    R = int(edge * 1.3) + 4
+    ys, xs = np.nonzero(kfull)
+    y0, y1, x0, x1 = max(ys.min() - R - 2, 0), ys.max() + R + 3, max(xs.min() - R - 2, 0), xs.max() + R + 3
+    kf = kfull[y0:y1, x0:x1]
+    hi = np.where(al[y0:y1, x0:x1] == 255, 128, (al[y0:y1, x0:x1] + 1) // 2)
+    ok_r2, ng_r2 = [], []
+    acc = np.zeros_like(kf)
+    for j in range(-R, R + 1):
+        for i in range(-R, R + 1):
+            sh = np.zeros_like(kf)
+            ys0, ys1 = max(0, j), kf.shape[0] + min(0, j)
+            xs0, xs1 = max(0, i), kf.shape[1] + min(0, i)
+            sh[ys0:ys1, xs0:xs1] = kf[ys0 - j:ys1 - j, xs0 - i:xs1 - i]
+            if (sh <= hi).all():
+                ok_r2.append(i * i + j * j)
+                np.maximum(acc, sh, out=acc)
+            else:
+                ng_r2.append(i * i + j * j)
+    if ok_r2:
+        top = max(ok_r2)
+        nxt = min([v for v in ng_r2 if v > top], default=None)
+        holes = sorted({v for v in ng_r2 if v <= top})
+        bad = int((np.minimum(255, 2 * acc) != al[y0:y1, x0:x1]).sum())
+        cur = max(i * i + j * j for i, j in vwsrender.edge_offsets(edge))
+        notes.append(f"縁 {edge}px: ずらし量の円は i² + j² ≤ {top} まで入る（次の {nxt} は入らない）。今の式では ≤ {cur}。"
+                     f"その円で作ったアルファと VWS の違い {bad} 画素" + (f"。円の中に入らない値がある: {holes[:6]}" if holes else ""))
+    else:
+        notes.append("縁: ずらし量を逆算できませんでした（文字面の位置が合っていない可能性）")
+    return notes
+
+
 def check(folder):
     found = 0
     for fn in sorted(os.listdir(folder)):
@@ -226,6 +281,11 @@ def check(folder):
         print(f"{fn}: 色のある {tot} 画素 → {verdict}  一致率 {100 * (1 - n / max(tot, 1)):.3f}%  書き出しの左上 {org}")
         if n:
             Image.fromarray(np.clip(d * 8, 0, 255).astype(np.uint8)).save(os.path.join(folder, stem + "_差.png"))
+            try:
+                for note in diagnose(t, png, org):
+                    print("      見当:", note)
+            except Exception as ex:
+                print("      見当: 出せませんでした", ex)
     if not found:
         print("照合できる組がありません。VWS の書き出し PNG を .ts1 と同じ名前で置いてください")
 

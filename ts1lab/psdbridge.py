@@ -436,6 +436,8 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     glyph_font = 新しい字形を作る元（gdiglyph.GdiGlyphSource など）。無ければ font_path のフォントファイルから作る"""
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
+    if getattr(template, "kind", "CSML") == "CSSL" and "\n" in text:
+        raise ValueError("雛形が枠なしの 1 行ものです。改行のある文言は戻せません（枠つきの .ts1 を雛形にしてください）")
     if any(g.code == 0xE73E for g in template.glyphs):     # 雛形が専用空白を使っているときだけ、1/4 em 空白を専用空白に戻す
         text = "".join(BLANK_FROM_PS.get(ch, ch) for ch in text)
     font = FontGlyphSource(font_path, font_index, fit=font_fit) if font_path else None
