@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from ts1core import CELL, TS1, FontGlyphSource, build_text
+from ts1core import CELL, COLOR_ORDER, TS1, FontGlyphSource, build_text
 from render import render_layers
 
 CANVAS = (1920, 1080)
@@ -18,7 +18,7 @@ CANVAS = (1920, 1080)
 # ----------------------------------------------------------------------------
 # TS1 → 画像 / PSD（ピクセルレイヤ）
 # ----------------------------------------------------------------------------
-def ts1_to_png(ts1: TS1, out_path, color_order="RGBA", edge=None):
+def ts1_to_png(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     """キャンバス全体（1920×1080）の透過 PNG"""
     from PIL import Image
     face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
@@ -29,7 +29,7 @@ def ts1_to_png(ts1: TS1, out_path, color_order="RGBA", edge=None):
     return out_path
 
 
-def ts1_to_psd(ts1: TS1, out_path, color_order="RGBA", edge=None):
+def ts1_to_psd(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     from psd_tools import PSDImage
     face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
     psd = PSDImage.new("RGBA", CANVAS, color=(0, 0, 0, 0))
@@ -184,7 +184,7 @@ def baseline_shift(size, font_fit):
     return (font_fit or {}).get("oy", 0.0) * size / CELL
 
 
-def ts1_spec(ts1: TS1, name="telop", color_order="RGBA", edge=None, ps_font=None,
+def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font=None,
              font_hints=(), cell_ratio=1.0, ref_png="", font_fit=None):
     """Photoshop 再現用のパラメータ
 
@@ -369,7 +369,7 @@ def read_psd_text(path, layer_name=None):
 
 
 def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name=None, font_id=None,
-               color_order="RGBA", clear_history=False, font_fit=None):
+               color_order=COLOR_ORDER, clear_history=False, font_fit=None):
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
     font = FontGlyphSource(font_path, font_index, fit=font_fit) if font_path else None

@@ -241,15 +241,21 @@ class HistoryEntry:
     action: str
 
 
-def decode_color(raw, order="RGBA"):
-    """CRGB チャンク → (r, g, b, a)。サンプルは R G B A の順（E7 2F 12 FF = 赤）"""
+# CRGB の色のバイト順。B G R A（Windows の DIB/RGBQUAD と同じ）。
+# 見本は E7 2F 12 FF = 青 #122FE7。2026-11-12 ユーザー確認「テロップは青エッジ」で確定
+# （それまで R G B A = 赤と解釈し、VWS の PNG が青いのは書き出し時の入れ替えと誤って推定していた）
+COLOR_ORDER = "BGRA"
+
+
+def decode_color(raw, order=COLOR_ORDER):
+    """CRGB チャンク → (r, g, b, a)"""
     c = raw[14:18]
     if order == "RGBA":
         return (c[0], c[1], c[2], c[3])
     return (c[2], c[1], c[0], c[3])
 
 
-def encode_color(rgba, order="RGBA"):
+def encode_color(rgba, order=COLOR_ORDER):
     r, g, b, a = (list(rgba) + [255])[:4]
     return bytes([r, g, b, a]) if order == "RGBA" else bytes([b, g, r, a])
 
@@ -327,7 +333,7 @@ class TS1:
     def glyphs(self):
         return [r for t, r in self.resources if t == "RCHR"]
 
-    def colors(self, order="RGBA"):
+    def colors(self, order=COLOR_ORDER):
         """CRGB リソースの色を (r, g, b, a) で返す（ORMP 内の順）"""
         out = []
         for t, raw in self.resources:
@@ -335,7 +341,7 @@ class TS1:
                 out.append(decode_color(raw, order))
         return out
 
-    def decorations(self, order="RGBA"):
+    def decorations(self, order=COLOR_ORDER):
         """先頭文字の ADCO（装飾）を読み、文字面・縁などの色と太さを返す
 
         ADCO = u16 ver, u16 件数, 50 バイト × 件数
@@ -374,14 +380,14 @@ class TS1:
             })
         return out
 
-    def face_color(self, order="RGBA"):
+    def face_color(self, order=COLOR_ORDER):
         for d in self.decorations(order):
             if d["role"] == "face" and d["color"]:
                 return d["color"]
         c = self.colors(order)
         return c[0] if c else (255, 255, 255, 255)
 
-    def edge_color(self, order="RGBA"):
+    def edge_color(self, order=COLOR_ORDER):
         for d in self.decorations(order):
             if d["role"] == "edge" and d["color"]:
                 return d["color"]
@@ -508,7 +514,7 @@ class TS1:
         return out
 
     # -- 情報 ---------------------------------------------------------------
-    def info(self, color_order="RGBA"):
+    def info(self, color_order=COLOR_ORDER):
         return {
             "text": self.text,
             "layer_name": self.layer_name,
@@ -533,7 +539,7 @@ class TS1:
 
     # -- 再構築 -------------------------------------------------------------
     def rebuild(self, chars=None, glyphs=None, pos=None, face_color=None, edge_color=None,
-                clear_history=False, keep_glyph_header=True, edge_width=None, color_order="RGBA"):
+                clear_history=False, keep_glyph_header=True, edge_width=None, color_order=COLOR_ORDER):
         """テンプレート（self）の構造を保ったまま、文字列・グリフ・位置・色を差し替えて書き出す"""
         b = self.data
         changed = chars is not None or glyphs is not None or pos is not None

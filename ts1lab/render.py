@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ts1core import PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE
+from ts1core import COLOR_ORDER, PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE
 
 
 def _quad(p0, c, p1, steps):
@@ -71,7 +71,7 @@ def fill_nonzero(polys, w, h):
 RENDER_OFFSET = (-0.125, -0.375)
 
 
-def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order="RGBA",
+def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order=COLOR_ORDER,
                   offset=RENDER_OFFSET):
     """(face RGBA, edge RGBA, (left, top)) を返す。画像はテロップ範囲だけ切り出し"""
     edge = ts1.edge_width() if edge is None else edge
@@ -120,7 +120,7 @@ def render_preview(ts1, canvas=(1920, 1080), bg=(40, 60, 90), **kw):
     return im
 
 
-def to_svg(ts1, canvas=(1920, 1080), edge=None, color_order="RGBA"):
+def to_svg(ts1, canvas=(1920, 1080), edge=None, color_order=COLOR_ORDER):
     """編集可能なベクター（SVG）として書き出す。縁は stroke（paint-order）で表現"""
     edge = ts1.edge_width() if edge is None else edge
     fc = "#%02x%02x%02x" % tuple(ts1.face_color(color_order)[:3])

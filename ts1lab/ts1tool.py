@@ -153,8 +153,8 @@ def cmd_selftest(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--color-order", choices=["RGBA", "BGRA"], default="RGBA",
-                    help="CRGB のバイト順（既定 RGBA: E7 2F 12 = 赤）")
+    ap.add_argument("--color-order", choices=["RGBA", "BGRA"], default="BGRA",
+                    help="CRGB のバイト順（既定 BGRA: E7 2F 12 = 青 #122FE7。VWS 実機で確認済み）")
     ap.add_argument("--edge", type=float, default=None, help="縁の太さ px（既定: ファイルから推定）")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

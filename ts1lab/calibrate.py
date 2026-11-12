@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
+from ts1core import COLOR_ORDER
 from render import render_layers, flatten_contour, fill_nonzero
 
 
@@ -45,7 +46,7 @@ def detect_colors(ref_path):
     return [(tuple(int(v) for v in keys[i]), int(counts[i])) for i in order[:4]]
 
 
-def compare(ts1, ref_path, color_order="RGBA", diff_path=None, search=True):
+def compare(ts1, ref_path, color_order=COLOR_ORDER, diff_path=None, search=True):
     face_rgb, edge_rgb = ts1.face_color(color_order)[:3], ts1.edge_color(color_order)[:3]
     # 見本 PNG の書き出しで R と B が入れ替わっている場合を自動判定
     ref_cols = [c for c, _ in detect_colors(ref_path)]
