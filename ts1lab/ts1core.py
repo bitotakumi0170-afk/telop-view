@@ -902,13 +902,28 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
     gtag = template.glyphs[0].tag if template.glyphs else b"RCHR"
     order = [0]
     for c in reversed(codes):
-        if c not in order and c not in (0x0A, newline_code):
-            order.append(c)
+        if c not in order:
+            order.append(c)      # 改行（U+000D）も字と同じ順で入る（VWS のファイルでは空の字形を持っている）
     usage = {c: codes.count(c) for c in order}
+    term = next((g for g in template.glyphs if g.code == 0), None)
+
+    def empty(code, advance=CELL):
+        """輪郭の無い字形（改行・空白）。VWS の空の字形と同じ形のヘッダ: 範囲 0、A・C = 0、B = 送り"""
+        g = Glyph(code, fid, 1, [], term.ascent if term else 1802, term.descent if term else 246)
+        hdr = bytearray(term.header_raw if (term and term.header_raw) else g.build_header())
+        struct.pack_into("<I", hdr, 32, code)
+        struct.pack_into("<iii", hdr, 44, 0, int(advance), 0)
+        g.header_raw = bytes(hdr)
+        return g
+
     glyphs = []
     for c in order:
-        if font is not None and c != 0 and c not in tmpl_glyphs:
+        if c == newline_code and c not in tmpl_glyphs:
+            g = empty(c)
+        elif font is not None and c != 0 and c not in tmpl_glyphs:
             g = font.glyph(c, fid, usage[c])
+            if not g.contours:       # 空白: 送りだけを持つ空の字形にする（専用空白 U+E73E と同じ形）
+                g = empty(c, g.advance_units())
         elif c in tmpl_glyphs:
             src = tmpl_glyphs[c]
             g = Glyph(c, src.font_id, usage[c], src.contours, src.ascent, src.descent, src.header_raw, None, src.tag)

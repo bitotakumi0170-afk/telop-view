@@ -3,6 +3,8 @@
 
   python vwstest.py make  見本.ts1 [出力フォルダ] [1行ものの見本.ts1]
         … 見本をもとに、条件を 1 つずつ変えた .ts1 と「予想の見た目」PNG を作る
+  python vwstest.py extra 見本.ts1 [出力フォルダ]
+        … 追加の確認用（半角入り・2 行・横 85%・サイズ 30・空白入り・ニューロダン EB）と、フォント番号調べ用の .ts1 を作る
   python vwstest.py check フォルダ
         … 「○○.png」か「[○○].png」（VWS の書き出し）があれば、同じ名前の .ts1 と画素単位で照合する
 
@@ -95,6 +97,79 @@ def make(src, outdir, src_1line=None):
     print(f"  → {outdir}（やり方.txt を見てください）")
 
 
+def make_extra(src, outdir):
+    """追加の確認用。まだ VWS で確かめていない並べ方・描き方を 1 つずつ入れる"""
+    import struct
+    import gdiglyph
+    from ts1core import fx
+    cfg = run.load_config()
+    with open(src, "rb") as f:
+        t = TS1(f.read())
+    e = run.font_for_id(cfg, t.font_id, t)
+    font = run.glyph_source(cfg, t.font_id, e, t)
+    if font is None:
+        print("  フォントが PC に無いため作れません")
+        return
+    os.makedirs(outdir, exist_ok=True)
+
+    def retext(text, fnt=font, size=None, font_id=None, prefer=True, mag=None):
+        chars, glyphs = build_text(t, text, font=fnt, spacing=[0.0] * (len(text) + 1), size=size, font_id=font_id,
+                                   prefer_template=prefer)
+        if mag is not None:      # 文字の倍率 %（横, 縦）
+            chars[0].attrs["ACMG"] = struct.pack("<Hii", 1, fx(mag[0]), fx(mag[1]))
+        return dict(chars=chars, glyphs=glyphs)
+
+    cases = [
+        ("21_半角入り", "半角の英数字が入った文言（字ごとに送り幅が違うときの並び）", retext("ABCabc123でテストする")),
+        ("22_2行", "改行して 2 行にしたもの", retext("1行目のテストです\n2行目です")),
+        ("23_横85%", "文字の横幅だけ 85% に", retext(t.text, mag=(85, 100))),
+        ("24_サイズ30", "文字サイズだけ 30 に（小さい字での曲線・切り方）", retext(t.text, size=(30, 30))),
+        ("25_空白入り", "半角の空白と全角の空白が入った文言", retext("空白 あり　全角")),
+    ]
+    # ニューロダン EB（番号 1121）で同じ文言
+    eb = run.load_table(cfg).get("1121", {})
+    try:
+        if eb.get("face"):
+            src_eb = gdiglyph.GdiGlyphSource(eb["face"], int(eb.get("y_shift", 183)), int(eb.get("weight", 0)))
+            cases.append(("26_EB", "フォントだけ ニューロダン EB（番号 1121）に。VWS のフォント名の表示も EB になるはず",
+                          retext(t.text, fnt=src_eb, font_id=1121, prefer=False)))
+    except Exception as ex:
+        print(f"  ※ ニューロダン EB が無いので 26 は作りません（{ex}）")
+    lines = ["VWS 確認用・追加分（元: %s 「%s」）" % (os.path.basename(src), t.text), "",
+             "第 2 回（11〜20）と同じやり方で、VWS で開いて PNG を書き出してください。余裕があれば、で大丈夫です。",
+             "開けないもの・字が崩れるもの・並びがおかしいものがあれば、その番号を教えてください。", ""]
+    for name, desc, kw in cases:
+        out = t.rebuild(**kw)
+        with open(os.path.join(outdir, name + ".ts1"), "wb") as f:
+            f.write(out)
+        t2 = TS1(out)
+        ts1_to_png(t2, os.path.join(outdir, name + "_予想.png"))
+        lines += [f"{name}.ts1 … {desc}", _describe(t2)]
+        print(f"  {name}.ts1 / {name}_予想.png  … {desc}")
+
+    # フォント番号調べ: 字形はニューロダン B のまま、フォント番号だけ変える。VWS は番号からフォント名を表示するので、
+    # 開いたときに表示されるフォント名を教えてもらえば 番号 → フォント の表が増える
+    probe = os.path.join(outdir, "フォント番号調べ")
+    os.makedirs(probe, exist_ok=True)
+    nums = [1113, 1114, 1115, 1116, 1117, 1118, 1120, 1122, 1123, 1124]
+    plines = ["フォント番号調べ（やらなくても大丈夫です）", "",
+              "見た目は全部同じ（ニューロダン B の字形）で、中のフォント番号だけ変えてあります。",
+              "VWS で開いて文字を選んだとき、フォント名の欄に何と出るかを教えてください（PNG は不要です）。",
+              "分かった番号はフォント表に登録して、次から名前が自動で出るようにします。",
+              "参考: 1119 = ニューロダン B、1121 = ニューロダン EB は確認済みです。", ""]
+    for n in nums:
+        kw = retext(t.text, font_id=n, prefer=False)
+        with open(os.path.join(probe, f"番号{n}.ts1"), "wb") as f:
+            f.write(t.rebuild(**kw))
+        plines.append(f"番号{n}.ts1 … フォント名: ")
+    with open(os.path.join(probe, "やり方.txt"), "w", encoding="utf-8-sig") as f:
+        f.write("\n".join(plines) + "\n")
+    with open(os.path.join(outdir, "やり方.txt"), "w", encoding="utf-8-sig") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"  フォント番号調べ: {len(nums)} 本 → {probe}")
+    print(f"  → {outdir}（やり方.txt を見てください）")
+
+
 def _find_png(folder, stem):
     for cand in (stem + ".png", f"[{stem}].png"):
         p = os.path.join(folder, cand)
@@ -156,9 +231,14 @@ def check(folder):
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ("make", "check"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("make", "extra", "check"):
         print(__doc__)
         return 1
+    if sys.argv[1] == "extra":
+        src = sys.argv[2]
+        out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(src)), "VWS確認用_追加")
+        make_extra(src, out)
+        return 0
     if sys.argv[1] == "make":
         src = sys.argv[2]
         out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(src)), "VWS確認用")
