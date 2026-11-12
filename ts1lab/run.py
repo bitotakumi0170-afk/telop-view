@@ -8,9 +8,13 @@
   python run.py identify 素材.ts1     → 字形を PC の全フォントと照合してフォントを特定、フォント表.json に登録
 """
 import json
+import logging
 import os
 import sys
 import traceback
+
+# 古いフォントを読むと fontTools が「'modified' timestamp seems very low」を大量に出すので黙らせる
+logging.getLogger("fontTools").setLevel(logging.ERROR)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -155,7 +159,8 @@ def identify(cfg, path):
         name = (jp or names or [ps])[0]
         tbl = load_table(cfg)
         old = tbl.get(str(fid), {})
-        tbl[str(fid)] = {"name": old.get("name") or name, "names": names, "postscript": ps, "file": fp, "index": idx,
+        name = old.get("name") or name
+        tbl[str(fid)] = {"name": name, "names": names, "postscript": ps, "file": fp, "index": idx,
                          "score": round(score, 4), **({k: round(v, 6) for k, v in fit.items()} if fit else {}),
                          **({"hints": old["hints"]} if "hints" in old else {})}
         save_table(cfg, tbl)
@@ -178,6 +183,7 @@ def to_ps(cfg, path):
           f"サイズ {info['char_size'][0]:g} / VWS フォント番号 {info['font_id']}")
     ratio, ps_font, hints = 1.0, cfg.get("photoshop_font"), list(cfg.get("font_name_hints", []))
     e = font_for_id(cfg, t.font_id, t)
+    fit = _fit_of(e)
     if e:
         ps_font = e.get("postscript") or ps_font
         hints = list(e.get("hints", [])) + hints
@@ -198,7 +204,7 @@ def to_ps(cfg, path):
     ts1_to_png(t, base + "_再現.png")
     ts1_to_psd(t, base + "_画像レイヤ.psd")
     ts1_to_jsx(t, base + "_Photoshop用.jsx", name=name, ps_font=ps_font,
-               font_hints=hints, cell_ratio=ratio,
+               font_hints=hints, cell_ratio=ratio, font_fit=fit,
                ref_png=name + "_再現.png")
     print(f"  → {name}_再現.png / {name}_画像レイヤ.psd / {name}_Photoshop用.jsx")
 
@@ -211,6 +217,8 @@ def to_ts1(cfg, path):
         tmpl = TS1(f.read())
     info = read_psd_text(path)
     print(f"  文言: {info['text']}  フォント: {info['font']}  サイズ: {info['size']:g}px")
+    for w in info.get("warnings", []):
+        print(f"  ※ {w}")
     font_id, fit, fp, fi = cfg.get("vws_font_id"), None, None, 0
     hit = font_for_ps(cfg, info["font"], tmpl)
     if hit:
@@ -225,13 +233,15 @@ def to_ts1(cfg, path):
         print("  ※ フォントファイルが見つからないため、テンプレート内の字形だけで組みます")
     out, info = psd_to_ts1(path, tmpl, font_path=fp, font_index=fi, font_fit=fit,
                            font_id=font_id, clear_history=cfg.get("clear_history", False))
-    with open(base + ".ts1", "wb") as f:
+    # 「○○.ts1」にすると to-ps の元にした .ts1 を上書きしてしまうので、必ず別名にする
+    with open(base + "_VWS用.ts1", "wb") as f:
         f.write(out)
     t = TS1(out)
     ts1_to_png(t, base + "_確認.png")
     i = t.info()
-    print(f"  文字色 {i['face_color']} / 縁色 {i['edge_color']} / 縁 {i['edge_width']}px / サイズ {i['char_size'][0]:g}")
-    print(f"  → {os.path.basename(base)}.ts1 / {os.path.basename(base)}_確認.png")
+    print(f"  文字色 {i['face_color']} / 縁色 {i['edge_color']} / 縁 {i['edge_width']}px / サイズ {i['char_size'][0]:g}"
+          f" / VWS フォント番号 {t.font_id}")
+    print(f"  → {os.path.basename(base)}_VWS用.ts1 / {os.path.basename(base)}_確認.png")
 
 
 def info(cfg, path):

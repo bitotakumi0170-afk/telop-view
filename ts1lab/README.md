@@ -55,8 +55,15 @@ python ts1tool.py compare 素材.ts1 VWS出力.png --diff 差分.png
 ```
 python run.py identify 素材.ts1   # 字形から PC 内のフォントを特定し フォント表.json に登録（番号 ⇄ フォント）
 python run.py to-ps  素材.ts1     # → 素材_再現.png / 素材_画像レイヤ.psd / 素材_Photoshop用.jsx
-python run.py to-ts1 テロップ.psd  # → テロップ.ts1 / テロップ_確認.png
+python run.py to-ts1 テロップ.psd  # → テロップ_VWS用.ts1 / テロップ_確認.png
 ```
+
+ドラッグ＆ドロップ用の bat は `python bat/make_bats.py <ts1lab の 1 つ上のフォルダ>` で作れます
+（セットアップ / TS1→Photoshop / PSD→TS1 / フォント特定 / 中身を見る）。
+
+Photoshop で作るテロップは、文字パネルの **カーニングを「0」** にしてください。既定の「メトリクス」はかなを詰めますが、
+VWS は全角を常に文字サイズ送りで並べるため再現できません（`to-ts1` は詰まりを検出すると警告します）。
+`to-ps` が出す JSX は最初からカーニング 0 で作ります。
 
 ## 仕組み
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from ts1core import TS1, FontGlyphSource, build_text
+from ts1core import CELL, TS1, FontGlyphSource, build_text
 from render import render_layers
 
 CANVAS = (1920, 1080)
@@ -96,7 +96,7 @@ app.preferences.rulerUnits = Units.PIXELS;
 app.preferences.typeUnits = TypeUnits.PIXELS;
 var doc = app.documents.add(SPEC.canvas[0], SPEC.canvas[1], 72, SPEC.name,
                             NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
-var lay = doc.artLayers.add();
+var lay = doc.activeLayer;  // 透明ドキュメントの空レイヤをそのままテキストレイヤにする（空レイヤを残さない）
 lay.kind = LayerKind.TEXT;
 lay.name = SPEC.text.replace(/\n/g, " ");
 var ti = lay.textItem;
@@ -104,6 +104,8 @@ ti.contents = SPEC.text.replace(/\n/g, "\r");
 ti.font = FONT;
 ti.size = new UnitValue(SPEC.ps_size, "px");
 ti.justification = Justification.CENTER;
+// VWS は全角を常に文字サイズ送りで並べる → Photoshop の既定「メトリクス」カーニングを切る（かなが詰まるため）
+ti.autoKerning = AutoKernType.MANUAL;
 var col = new SolidColor(); col.rgb.red = SPEC.fill[0]; col.rgb.green = SPEC.fill[1]; col.rgb.blue = SPEC.fill[2];
 ti.color = col;
 ti.useAutoLeading = false;
@@ -121,6 +123,8 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
     r.putInteger(s("from"), i); r.putInteger(s("to"), i + 1);
     base.putInteger(s("tracking"), SPEC.tracking[i]);
     base.putUnitDouble(s("size"), c("#Pxl"), SPEC.ps_size);
+    base.putEnumerated(s("autoKern"), s("autoKern"), s("manual"));
+    base.putInteger(s("kerning"), 0);
     r.putObject(s("textStyle"), s("textStyle"), base);
     list.putObject(s("textStyleRange"), r);
   }
@@ -174,13 +178,20 @@ alert("保存しました: " + out.fsName + "\nフォント: " + FONT);
 """
 
 
+def baseline_shift(size, font_fit):
+    """VWS のベースライン（CSML.y）→ フォント本来のベースラインまでの縦の差 px（上が負）。
+    フォント表の oy（2048 セル単位）から求める。見本のニューロダン B は oy=-183 → 100px で -8.95px"""
+    return (font_fit or {}).get("oy", 0.0) * size / CELL
+
+
 def ts1_spec(ts1: TS1, name="telop", color_order="RGBA", edge=None, ps_font=None,
-             font_hints=(), cell_ratio=1.0, ref_png=""):
+             font_hints=(), cell_ratio=1.0, ref_png="", font_fit=None):
     """Photoshop 再現用のパラメータ
 
     cell_ratio = (winAscent + winDescent) / unitsPerEm（フォントファイルから。不明なら 1）
       VWS の文字サイズはセル高なので Photoshop のサイズ = VWS サイズ / cell_ratio。
       全角の送りを VWS（= セル幅）に合わせるため、差分をトラッキングに足す。
+    font_fit = フォント表の {"scale", "ox", "oy"}。oy でアンカーの縦位置をフォントのベースラインに合わせる。
     """
     face, edgec = ts1.face_color(color_order), ts1.edge_color(color_order)
     size = ts1.char_size[0]
@@ -199,7 +210,7 @@ def ts1_spec(ts1: TS1, name="telop", color_order="RGBA", edge=None, ps_font=None
         # VWS の ACSP は「その文字の前」→ Photoshop では 1 つ前の文字のトラッキング
         "tracking": [int(round(sp[i + 1] / ps_size * 1000 + extra)) if i + 1 < len(chars) else 0
                      for i in range(len(chars))],
-        "anchor": [ts1.pos[0] + ts1.box[0] / 2, ts1.pos[1]],
+        "anchor": [ts1.pos[0] + ts1.box[0] / 2, round(ts1.pos[1] + baseline_shift(size, font_fit), 3)],
         "fill": list(face[:3]),
         "edge_color": list(edgec[:3]),
         "edge_opacity": round(edgec[3] / 255 * 100, 1),
@@ -314,6 +325,32 @@ def read_psd_text(path, layer_name=None):
 
     edge, edge_color = _read_stroke(L)
 
+    # カーニング（メトリクス/オプティカル）・文字ツメは PSD の文字スタイルに区別が残らない
+    # （AutoKerning は手動でも True）。効いた結果は組み幅 (TySh の bounds) に出るので、
+    # 「全角送り + トラッキング」の計算幅と比べて詰まっていたら警告する（VWS では再現できない）
+    warnings = []
+    try:
+        from psd_tools.constants import Tag
+        td = L.tagged_blocks.get_data(Tag.TYPE_TOOL_OBJECT_SETTING)
+        b = td.text_data[b"bounds"]
+        laid = (float(b[b"Rght"]) - float(b[b"Left"])) * float(xx)
+        expect, k = 0.0, 0
+        for line in text.split("\n"):
+            w = sum(size + tracking[k + j] / 1000 * size for j in range(len(line) - 1)) + (size if line else 0)
+            expect = max(expect, w)
+            k += len(line) + 1
+        if expect - laid > 2:
+            warnings.append(f"文字が計算より {expect - laid:.1f}px 詰まっています（組み幅 {laid:.1f}px / 全角送り+トラッキング {expect:.1f}px）。"
+                            "カーニング（メトリクス/オプティカル）か文字ツメが効いています。VWS では再現できないので、"
+                            "Photoshop の文字パネルでカーニングを「0」、ツメを 0% にしてください")
+    except Exception:
+        pass
+    if any(float(get(ssd, "Tsume", 0) or 0) for ssd in per_char[:len(text)]):
+        warnings.append("文字ツメ（Tsume）が設定されています。VWS では再現できません")
+    if any(abs(float(get(ssd, k, 1.0)) - 1.0) > 1e-3 for ssd in per_char[:len(text)]
+           for k in ("HorizontalScale", "VerticalScale")):
+        warnings.append("垂直比率・水平比率（長体/平体）が 100% ではありません。今の変換では反映されません")
+
     return {
         "layer": L.name,
         "text": str(text),
@@ -327,6 +364,7 @@ def read_psd_text(path, layer_name=None):
         "edge_color": edge_color,
         "leading": float(leading) * float(yy) if (leading is not None and not auto_lead) else None,
         "canvas": (psd.width, psd.height),
+        "warnings": warnings,
     }
 
 
@@ -360,6 +398,8 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     ax, ay = info["anchor"]
     left = {"left": ax, "center": ax - w0 / 2, "right": ax - w0}[info["justification"]]
     box_w = template.box[0]
+    # Photoshop のアンカーはフォント本来のベースライン → VWS のベースラインへ戻す（ts1_spec の逆）
+    ay -= baseline_shift(size, font_fit)
     pos = (left + w0 / 2 - box_w / 2, ay + (len(lines) - 1) * (size + template.line_spacing))
 
     edge = info["edge"] if info["edge"] else None   # 境界線が無ければテンプレートの縁を維持
