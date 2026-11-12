@@ -38,6 +38,7 @@ Photoshop の実行確認は COM（`Photoshop.Application` の `DoJavaScriptFile
 ラッパ側で `$.global.alert` を差し替えれば止まらない。
 
 | 色の並び | **直した**: VWS 実機で縁が青と確認 → CRGB は B G R A 順。Photoshop の境界線も青 (18,47,231) になり、往復で色のバイトも一致 |
+| Photoshop 出力 ⇔ VWS の PNG | 直接照合: 各文字 ±1px、縁込みの範囲 ±2px、縁の色 (18,47,231) 一致、縁の太さ 6px、重なり 96.9% |
 | VWS で `見本_VWS用.ts1` を開く | **ユーザー確認: 開ける・フォント名はニューロダン B と表示**（2026-11-12）。見本の VWS 出力 PNG と生成 .ts1 の描画は全 16 文字ずれ 0px・誤差 2.06%（元の見本は 1.96%） |
 
 ## まだ確認できていないこと
@@ -98,4 +99,6 @@ python ts1tool.py compare 見本.ts1 VWS出力.png --diff 差分.png   # VWS 出
 
 - 実機（VWS）での確認は本番データを避け、テスト用の環境で行う
 - 色は B G R A 順（`ts1core.COLOR_ORDER`）。見本の縁は青 #122FE7。VWS の PNG 書き出しでの色の入れ替えは無い
+- **ユーザーから VWS の書き出し PNG が来たら、聞き返さずに PNG を正解として自分で照合・判断する**（ユーザーの希望）。
+  `ts1tool.py compare` で .ts1 と、Photoshop の出力（COM で JSX を実行して PNG 保存）とも直接比べる。PNG から分からないこと（VWS 上のフォント名表示など）だけ聞く
 - 字間（ACSP）は「その文字の直前」に効く。Photoshop のトラッキングは「その文字の後ろ」なので 1 文字ずらして変換している
