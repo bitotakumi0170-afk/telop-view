@@ -116,6 +116,46 @@ def _fit_of(e):
     return {k: e[k] for k in ("scale", "ox", "oy")} if e and "scale" in e else None
 
 
+def glyph_source(cfg, fid, e, ts1=None, quiet=False):
+    """新しい字形を作る元を返す。
+    Windows にそのフォントが入っていれば GDI から作る（VWS が作る字形データとバイト単位で同じになる）。
+    入っていなければフォントファイルから作る（近似。点の位置が VWS と少し違う）。どちらも無ければ None。
+    ts1 = そのフォントの字形を持つ .ts1（縦位置のずれ y_shift を実測するのに使う）"""
+    if not e:
+        return None
+    try:
+        import gdiglyph
+        if gdiglyph.available():
+            faces = ([e["face"]] if e.get("face") else []) + [n for n in e.get("names", []) if n != e.get("face")]
+            has_ref = ts1 is not None and any(g.code and g.contours and g.font_id == int(fid) for g in ts1.glyphs)
+            for face in faces:
+                with gdiglyph.GdiFont(face) as f:
+                    if not f.matched():
+                        continue
+                if has_ref:      # 手元の .ts1 の字形と 1 点残らず一致する値だけ使う
+                    shift = gdiglyph.measure_shift(ts1, face, font_id=int(fid))
+                else:
+                    shift = e.get("y_shift") if e.get("face") == face else None
+                if shift is None:
+                    continue
+                if e.get("face") != face or e.get("y_shift") != shift:
+                    e["face"], e["y_shift"] = face, shift
+                    tbl = load_table(cfg)
+                    tbl[str(fid)] = e
+                    save_table(cfg, tbl)
+                if not quiet:
+                    print(f"  字形の作り方: Windows の「{face}」から VWS と同じ方法で作成")
+                return gdiglyph.GdiGlyphSource(face, shift)
+    except Exception as ex:
+        if not quiet:
+            print(f"  ※ Windows からの字形作成は使えませんでした（{ex}）")
+    if e.get("file"):
+        if not quiet:
+            print("  ※ 字形はフォントファイルから作ります（VWS の字形と点の位置が少し違います）")
+        return FontGlyphSource(e["file"], int(e.get("index", 0)), fit=_fit_of(e))
+    return None
+
+
 def find_font(cfg, ps_name=None):
     """設定のフォントファイル → PostScript 名 → 名前のヒント語 の順で探す"""
     fp = resolve(cfg, cfg.get("font_file"))
@@ -154,15 +194,34 @@ def identify(cfg, path):
     for score, names, fp, idx, fit in res[:8]:
         print(f"   {score * 100:5.1f}%  {' / '.join(names[:3])}   [{os.path.basename(fp)}]")
     score, names, fp, idx, fit = res[0]
-    if score >= 0.95:
+    # Windows の字形（GDI）と 1 点残らず一致する候補があれば、それを採る（太さ違いなどの取り違えが無くなる）
+    exact = None
+    try:
+        import gdiglyph
+        if gdiglyph.available():
+            for cand in res[:8]:
+                for face in cand[1]:
+                    sh = gdiglyph.measure_shift(t, face, font_id=fid)
+                    if sh is not None:
+                        exact = (cand, face, sh)
+                        break
+                if exact:
+                    break
+    except Exception:
+        exact = None
+    if exact:
+        (score, names, fp, idx, fit), face, sh = exact
+        print(f"\n  Windows の「{face}」の字形と 1 点残らず一致しました（縦位置のずれ {sh}）")
+    if score >= 0.95 or exact:
         ps = fontfind.postscript_name(fp, idx)
         jp = [n for n in names if any(ord(ch) > 0x2E80 for ch in n)]
         name = (jp or names or [ps])[0]
         tbl = load_table(cfg)
         old = tbl.get(str(fid), {})
-        name = old.get("name") or name
+        name = old.get("name") or (exact[1] if exact else name)
         tbl[str(fid)] = {"name": name, "names": names, "postscript": ps, "file": fp, "index": idx,
                          "score": round(score, 4), **({k: round(v, 6) for k, v in fit.items()} if fit else {}),
+                         **({"face": exact[1], "y_shift": exact[2]} if exact else {}),
                          **({"hints": old["hints"]} if "hints" in old else {})}
         save_table(cfg, tbl)
         print(f"\n  ★ 特定: VWS フォント番号 {fid} = 「{name}」 (PostScript: {ps})")
@@ -180,7 +239,7 @@ def to_ps(cfg, path):
         t = TS1(f.read())
     info = t.info()
     print(f"  文言: {info['text']}")
-    print(f"  文字色 {info['face_color']} / 縁色 {info['edge_color']} / 縁 {info['edge_width']}px / "
+    print(f"  文字色 {info['face_color']} / 縁色 {info['edge_color']} / 縁 {str(info['edge_width']) + 'px' if info['edge_width'] else 'なし'} / "
           f"サイズ {info['char_size'][0]:g} / VWS フォント番号 {info['font_id']}")
     ratio, ps_font, hints = 1.0, cfg.get("photoshop_font"), list(cfg.get("font_name_hints", []))
     e = font_for_id(cfg, t.font_id, t)
@@ -222,9 +281,11 @@ def to_ts1(cfg, path):
         print(f"  ※ {w}")
     font_id, fit, fp, fi = cfg.get("vws_font_id"), None, None, 0
     hit = font_for_ps(cfg, info["font"], tmpl)
+    gsrc = None
     if hit:
         font_id, e = hit
         fp, fi, fit = e.get("file"), int(e.get("index", 0)), _fit_of(e)
+        gsrc = glyph_source(cfg, font_id, e, tmpl)
         print(f"  VWS フォント番号 {font_id}「{e.get('name')}」（フォント表より）")
     else:
         print(f"  ※ 「{info['font']}」の VWS フォント番号は未登録です。番号はテンプレートと同じ {font_id or tmpl.font_id} を書き込みます")
@@ -234,14 +295,14 @@ def to_ts1(cfg, path):
         print("  ※ フォントファイルが見つからないため、テンプレート内の字形だけで組みます")
     out, info = psd_to_ts1(path, tmpl, font_path=fp, font_index=fi, font_fit=fit,
                            font_id=font_id, clear_history=cfg.get("clear_history", False),
-                           prefer_template=bool(hit))
+                           prefer_template=bool(hit), glyph_font=gsrc)
     # 「○○.ts1」にすると to-ps の元にした .ts1 を上書きしてしまうので、必ず別名にする
     with open(base + "_VWS用.ts1", "wb") as f:
         f.write(out)
     t = TS1(out)
     ts1_to_png(t, base + "_確認.png")
     i = t.info()
-    print(f"  文字色 {i['face_color']} / 縁色 {i['edge_color']} / 縁 {i['edge_width']}px / サイズ {i['char_size'][0]:g}"
+    print(f"  文字色 {i['face_color']} / 縁色 {i['edge_color']} / 縁 {str(i['edge_width']) + 'px' if i['edge_width'] else 'なし'} / サイズ {i['char_size'][0]:g}"
           f" / VWS フォント番号 {t.font_id}")
     print(f"  → {os.path.basename(base)}_VWS用.ts1 / {os.path.basename(base)}_確認.png")
 
@@ -264,9 +325,10 @@ def retype(cfg, path, text=None):
     font = None
     have = {g.code for g in t.glyphs}
     need = sorted({c for c in text if c != "\n" and ord(c) not in have})
-    if e and e.get("file"):
-        font = FontGlyphSource(e["file"], int(e.get("index", 0)), fit=_fit_of(e))
+    if e:
         print(f"  フォント: {e.get('name')}（VWS 番号 {t.font_id}）")
+        font = glyph_source(cfg, t.font_id, e, t)
+    if font is not None:
         if need:
             print(f"  元の .ts1 に無い {len(need)} 文字はフォントから作ります: {''.join(need)}")
     elif need:
@@ -280,7 +342,7 @@ def retype(cfg, path, text=None):
     t2 = TS1(out)
     ts1_to_png(t2, base + "_確認.png")
     width = max(len(line) for line in text.split("\n")) * t2.char_size[0]
-    if width > t2.box[0]:
+    if t2.kind == "CSML" and width > t2.box[0]:      # 1 行もの（CSSL）は枠が無い（行の幅が文言に合わせて変わる）
         print(f"  ※ 文字の幅 {width:g}px が枠の幅 {t2.box[0]:g}px を超えています（VWS で左右がはみ出す可能性があります）")
     print(f"  新しい文言: {t2.text}")
     print(f"  → {os.path.basename(base)}.ts1 / {os.path.basename(base)}_確認.png")

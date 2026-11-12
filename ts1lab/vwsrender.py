@@ -1,21 +1,20 @@
 """VWS と同じ手順でテロップを描く（VWS の書き出し PNG の画素値から突き止めた描き方。2026-11-12）
 
-VWS の描き方（見本 1 件・縁 6px・ニューロダン B 100px で確認）
-  1. 字の原点を 8 倍の整数格子に置く。横は「行の先頭字からの距離 × 0.9999」を 1/8px に四捨五入
-     （1 字の送りが 100px ではなく 99.99px。7 字目で 1/8px の段差が出る）
+VWS の描き方（見本と、確認用の縁 3px・縁 10px・サイズ 60・位置変更・色変更を VWS で開いた書き出しで確認。ニューロダン B）
+  1. 字の原点を 8 倍の整数格子に置く。横は 1 字進むごとに 0.01px ずつ詰めてから 1/8px に四捨五入
+     （サイズ 100 でも 60 でも 1 字あたり 0.01px。7〜8 字目で 1/8px の段差が出る。行の先頭字が基準）
   2. 輪郭の点（2048 単位）を 8 倍の格子へ: (int)(座標 × サイズ × 8 / 2048)。C の整数変換 = 0 方向へ切り捨て
      （x は左へ、ベースラインより上の y は下へ寄る）
   3. 2 次ベジェ曲線は、整数のまま半分ずつに割る（中点 (a + b) / 2 も 0 方向へ切り捨て）。
      弦の中点 p0 + (p1 − p0) / 2 と制御点の差 h が hx² + hy² ≤ 17 になったら割るのをやめて直線でつなぐ
   4. 多角形を GDI と同じ規則で塗る（8 倍サイズ・整数座標の点で内外判定・左と上を含み右と下を含まない）
   5. 1 画素 = 8×8 の点を数える → 1 ラインぶんの文字面 m (0..64)
-  6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとに上端を整数行に丸めて、その上にはみ出す行は切る
-  7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量は i² + j² ≤ (縁 + 0.5)² の全整数点）
-  8. 色 = 切り捨て(縁色′ + (文字色′ − 縁色′) × k / 128)、アルファ = min(255, 2 × 縁の k)
-     内部の色′は 8bit 値に端数が乗っている（R +0.90〜0.95、G +0.81、B +0.10。見本の白と青から逆算）
-見本（16 字）では、色のある 120,056 画素のうち VWS の PNG と違うのは 2 画素（差 2/255）だけ = 99.998% が完全一致。
-残る 2 画素は「な」の輪郭の先端の 1 点（8×8 のうち 1 点。閉じる辺と最初の曲線がつながる頂点）で、本物の GDI で塗っても同じ差が出る。
-影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。
+  6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとに上端を整数行に丸めて、その上にはみ出す行は切る。
+     左も、字の左端（実数）が画素の右 1/8 に入っていたら、その画素列は描かない
+  7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量は i² + j² ≤ 1.15 × 縁² の全整数点。縁 3・6・10px で確認）
+  8. 色 = (縁色 × 256 + (文字色 − 縁色) × (a + 1)) >> 8、a = min(255, 2 × k)。アルファ = min(255, 2 × 縁の k)
+見本と確認用 5 本の 6 枚すべてで、VWS の PNG と 1 画素も違わない（100%）。
+影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。縁なし・縁 3/6/10px 以外・文字が縁より暗い色は VWS では未確認。
 """
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ from PIL import Image
 from ts1core import COLOR_ORDER, PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE
 
 SS = 8                 # 1px を 8×8 に分ける
-ADVANCE_SCALE = 0.9999  # 字送りの倍率（行の先頭字の位置を基準）
+ADVANCE_LOSS = 0.01     # 1 字進むごとに詰まる量 px（行の先頭字が基準）。サイズ 100 と 60 で同じ値（倍率ではない）
 # 曲線を割るのをやめる条件（8 倍格子の整数）:
 #   h = p0 + (p1 − p0) / 2 − c   … 弦の中点と制御点の差。割り算は C の整数割り算（0 方向へ切り捨て）
 #   hx² + hy² ≤ FLAT_SQ なら割らずに直線でつなぐ
@@ -36,9 +35,6 @@ ADVANCE_SCALE = 0.9999  # 字送りの倍率（行の先頭字の位置を基準
 # 「p0 − 2c + p1」（2 階差分）で判定すると奇数のときの丸めが合わず、十数本の曲線で割り方が食い違う。
 FLAT_SQ = 17
 MAX_DEPTH = 8
-# 内部の色′ = 8bit 値 + COLOR_BIAS + COLOR_GAIN × 値 / 255（チャンネルごと。見本の 129 色すべてが再現できる値）
-COLOR_BIAS = (0.902, 0.81, 0.10)
-COLOR_GAIN = (0.043, 0.0, -0.01)
 
 
 def _tdiv2(a, b):
@@ -117,10 +113,16 @@ def fill_gdi(polys, w, h):
     return np.cumsum(acc, axis=1)[:, :w] != 0
 
 
+EDGE_R2 = 1.15   # 縁のずらし量の円の半径² = EDGE_R2 × 縁²（半径 ≒ 縁 × 1.07）
+
+
 def edge_offsets(edge):
-    """縁のずらし量（整数点の円板）"""
-    r2 = (edge + 0.5) ** 2
-    n = int(math.floor(edge + 0.5))
+    """縁のずらし量（整数点の円板）。VWS の PNG から逆算した範囲:
+        縁 3px: i² + j² ≤ 10（13 は入らない） / 6px: ≤ 41（45 は入らない） / 10px: ≤ 113（116 は入らない）
+    3 つとも満たす式として 半径² = 1.15 × 縁² を使う（半径 = 縁 + 0.5 では 10px が合わない）。
+    ほかの縁幅では未確認（1・2・4・5px と 13px 以上は、式の選び方で 1 段ずれる可能性がある）"""
+    r2 = EDGE_R2 * edge * edge
+    n = int(math.floor(math.sqrt(r2)))
     return [(i, j) for i in range(-n, n + 1) for j in range(-n, n + 1) if i * i + j * j <= r2]
 
 
@@ -138,12 +140,14 @@ def face_counts(ts1, canvas=(1920, 1080)):
     """文字面の量 k_f (0..128) をキャンバス全体の int 配列で返す"""
     W, H = canvas
     kf = np.zeros((H, W), np.int32)
-    first_x = {}
+    nth = {}
     for ch, g, x, y, sc in ts1.layout():
+        row = round(y, 3)
+        i = nth.get(row, 0)                                     # 行の中で何字目か（0 始まり。空白も数える）
+        nth[row] = i + 1
         if not g.contours:
             continue
-        x0 = first_x.setdefault(round(y, 3), x)                 # 行の先頭字
-        g8x = int(math.floor((x0 + (x - x0) * ADVANCE_SCALE) * SS + 0.5))
+        g8x = int(math.floor((x - ADVANCE_LOSS * i) * SS + 0.5))
         g8y = int(math.floor(y * SS + 0.5))
         polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS)
         xs = [p[0] for pl in polys for p in pl]
@@ -159,10 +163,18 @@ def face_counts(ts1, canvas=(1920, 1080)):
         k = m.copy()
         k[:-1] += m[1:]                                                    # 上下 2 ライン
         # 上端: 字の上端（8 倍格子）を整数行に丸め、その 1 行上から描く。それより上にはみ出す行は切る
-        top8 = g8y + min(ys)
+        # 上端・左端は、実際に描いた多角形ではなく輪郭データの点（制御点も含む）の範囲から決まる
+        # （曲線レコードを壊した確認用ファイルの VWS 書き出しで確認: 読まれない点も範囲に入る）
+        top8 = g8y + int(-g.bbox()[1] * getattr(sc, "sy", sc) * SS)
         first_row = (top8 + SS // 2 - 1) // SS - 1   # = ceil(上端px - 0.5) - 1。端数 .5 ちょうどは切らない（別サンプルの OFRI で確認）
         if first_row - py0 > 0:
             k[:first_row - py0] = 0
+        # 左端: 字の左端を実数（丸める前の原点 + 輪郭の左端 × 倍率）で出し、画素の右 1/8 に入っていたらその画素列は描かない。
+        # 見本の「な」、サイズ 60 の「て」「で」の先端 1 点がこれで消える（左端が 7.17〜7.58/8 の 3 例は描かず、6.64/8 の 1 例は描く）
+        left8 = (x - ADVANCE_LOSS * i) * SS + g.bbox()[0] * getattr(sc, "sx", sc) * SS
+        first_col = int(math.floor((left8 + 1) / SS))
+        if first_col - px0 > 0:
+            k[:, :first_col - px0] = 0
         # キャンバスへ（字どうしが重なる所は大きい方）
         cx0, cy0 = max(px0, 0), max(py0, 0)
         cx1, cy1 = min(px1, W), min(py1, H)
@@ -172,40 +184,68 @@ def face_counts(ts1, canvas=(1920, 1080)):
     return kf
 
 
+def real_bbox(ts1):
+    """字形の範囲（輪郭データの点。制御点も含む）を実数のまま画面に置いたときの外接範囲 (L, T, R, B)。無ければ None"""
+    L = T = float("inf")
+    R = B = float("-inf")
+    nth = {}
+    for ch, g, x, y, sc in ts1.layout():
+        row = round(y, 3)
+        i = nth.get(row, 0)
+        nth[row] = i + 1
+        if not g.contours:
+            continue
+        sx, sy = getattr(sc, "sx", sc), getattr(sc, "sy", sc)
+        l, top, r, btm = g.bbox()          # y は上向き正
+        xx = x - ADVANCE_LOSS * i
+        L, R = min(L, xx + l * sx), max(R, xx + r * sx)
+        T, B = min(T, y - top * sy), max(B, y - btm * sy)
+    return None if L == float("inf") else (L, T, R, B)
+
+
 def drawn_bbox(ts1, edge=None, canvas=(1920, 1080)):
-    """OFRI に入る描画範囲 (left, top, right, bottom) を、実際に描いた文字面から求める。描くものが無ければ None。
-    見本: 文字面の画素範囲 (204, 946)-(1786, 1043) → OFRI (198, 940, 1793, 1049)
-      = 左・上は 縁ぶん外、下は 縁ぶん外、右だけ 縁 + 1 外（右の +1 は見本 1 件からの値）
-    影があるとき（別サンプル 1 件。画像が無いので推定）: 右へ 影の広がり、下へ 影の広がり + 2"""
+    """OFRI に入る描画範囲 (left, top, right, bottom)。描くものが無ければ None。
+    VWS は描いた結果からではなく、字形の範囲の実数値 (L, T, R, B) から決めている:
+        left   = floor(L + 1/8) − 縁          … 横は 1/8px ぶん右へ寄せてから切り捨て
+        top    = ceil(T − 0.5) − 1 − 縁       … 縦は四捨五入。上は 2 ライン足しのぶん 1 行広い
+        right  = floor(R + 1/8) + 1 + 縁
+        bottom = floor(B + 0.5) + 1 + 縁
+    VWS が保存した 3 種類（見本・縁なしの 1 行もの・別サンプル）と、確認用を VWS で開いたときの書き出し範囲
+    （縁 3・10px、サイズ 60、字形を壊した版）がすべてこの式どおり。
+    影があるとき（別サンプル 1 件だけ）: 右へ 影の広がり、下へ 影の広がり + 1"""
     edge = ts1.edge_width() if edge is None else edge
     edge = int(edge or 0)
-    kf = face_counts(ts1, canvas)
-    ys, xs = np.nonzero(kf)
-    if len(ys) == 0:
+    rb = real_bbox(ts1)
+    if rb is None:
         return None
-    l, t, r, b = int(xs.min()) - edge, int(ys.min()) - edge, int(xs.max()) + 1 + edge + 1, int(ys.max()) + 1 + edge
+    L, T, R, B = rb
+    l = int(math.floor(L + 0.125)) - edge
+    t = int(math.ceil(T - 0.5)) - 1 - edge
+    r = int(math.floor(R + 0.125)) + 1 + edge
+    b = int(math.floor(B + 0.5)) + 1 + edge
     sh = ts1.shadow() if hasattr(ts1, "shadow") else None
     if sh:
         r += int(sh["reach"])
-        b += int(sh["reach"]) + 2
+        b += int(sh["reach"]) + 1
     return (l, t, r, b)
 
 
-def _internal(color):
-    return np.array([color[i] + COLOR_BIAS[i] + COLOR_GAIN[i] * color[i] / 255.0 for i in range(3)])
-
-
 def compose(kf, face_rgb, edge_rgb, edge):
-    """k_f → RGBA (uint8)。VWS と同じ整数の丸め"""
+    """k_f → RGBA (uint8)。VWS と同じ整数の計算:
+        文字面の不透明度 a = min(255, 2 × k)
+        色 = (縁色 × 256 + (文字色 − 縁色) × (a + 1)) >> 8      … よくある「(a + 1) を掛けて 256 で割る」重ね方
+        アルファ = min(255, 2 × 縁の k)
+    見本（白 / 青）と確認用の色変更（黄 #FFE600 / 黒）の全部の色がこの式どおり（文字色 < 縁色 のときの丸めは未確認）"""
     if edge and edge > 0:
         ke = _dilate(kf, edge_offsets(edge))
-        base = _internal(edge_rgb)
+        base = np.array(edge_rgb[:3], np.int64)
     else:
         ke = kf
-        base = _internal(face_rgb)
-    fi = _internal(face_rgb)
+        base = np.array(face_rgb[:3], np.int64)
+    fi = np.array(face_rgb[:3], np.int64)
     out = np.zeros(kf.shape + (4,), np.uint8)
-    rgb = np.floor(base[None, None] + (fi - base)[None, None] * (kf[..., None] / 128.0))
+    a = np.minimum(255, 2 * kf).astype(np.int64)[..., None]
+    rgb = (base[None, None] * 256 + (fi - base)[None, None] * (a + 1)) >> 8
     out[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
     out[..., 3] = np.minimum(255, 2 * ke).astype(np.uint8)
     out[ke == 0] = 0

@@ -410,12 +410,14 @@ def read_psd_text(path, layer_name=None):
 
 
 def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name=None, font_id=None,
-               color_order=COLOR_ORDER, clear_history=False, font_fit=None, prefer_template=False):
-    """prefer_template=True: テンプレートと同じフォント番号なら、テンプレートにある文字は VWS の字形をそのまま使う"""
+               color_order=COLOR_ORDER, clear_history=False, font_fit=None, prefer_template=False, glyph_font=None):
+    """prefer_template=True: テンプレートと同じフォント番号なら、テンプレートにある文字は VWS の字形をそのまま使う
+    glyph_font = 新しい字形を作る元（gdiglyph.GdiGlyphSource など）。無ければ font_path のフォントファイルから作る"""
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
     font = FontGlyphSource(font_path, font_index, fit=font_fit) if font_path else None
     ratio = font.cell_ratio if font else 1.0
+    font = glyph_font or font
     ps_size = info["size"]
     size = round(vws_size_of(ps_size, ratio), 3)  # Photoshop の em → VWS のセル高（ts1_spec の逆）
     n = len(text)

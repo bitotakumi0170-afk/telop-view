@@ -86,6 +86,7 @@ class Glyph:
     descent: int = 246
     header_raw: bytes | None = None  # 解析元のヘッダ（再現性のため保持）
     rchr_raw: bytes | None = None    # 解析元の RCHR 丸ごと
+    tag: bytes = b"RCHR"             # チャンク名。RCHR か RUCH（中身の並びは同じ。RUCH は MCHR に USCU が付くファイルで使われる）
 
     @property
     def char(self):
@@ -149,24 +150,32 @@ class Glyph:
         wv = b"WVCT" + struct.pack("<II", 4 + len(hdr) + len(data), len(data)) + hdr + data
         head = struct.pack("<HHHI", 1, self.usage, 0, self.font_id) + b"\x00" * 4 + struct.pack("<I", self.code)
         body = head + wv
-        return b"RCHR" + struct.pack("<I", 8 + len(body)) + body
+        if self.tag == b"RUCH":      # RUCH は WVCT のあとに「コード数 1 + 文字コード」が付く
+            body += struct.pack("<II", 1, self.code)
+        return self.tag + struct.pack("<I", 8 + len(body)) + body
 
 
 def parse_rchr(b, o) -> Glyph:
-    _, size = chunk_at(b, o, b"RCHR")
+    tag, size = chunk_at(b, o)
+    assert tag in (b"RCHR", b"RUCH"), f"0x{o:x}: グリフのチャンクではない {tag!r}"
     usage = u16(b, o + 10)
     font_id = u32(b, o + 14)
     code = u32(b, o + 22)
     w = o + 26
-    chunk_at(b, w, b"WVCT")
+    _, wsize = chunk_at(b, w, b"WVCT")
     dlen = u32(b, w + 8)
     hdr_start = w + 12
-    data_start = o + size - dlen
+    wend = w + 8 + wsize             # RCHR では WVCT の終わり = チャンクの終わり。RUCH はそのあとに 8 バイト付く
+    if tag == b"RUCH":
+        assert bytes(b[wend:o + size]) == struct.pack("<II", 1, code), f"RUCH 0x{o:x} の末尾が想定と違う"
+    else:
+        assert wend == o + size, f"RCHR 0x{o:x} の長さ不一致"
+    data_start = wend - dlen
     hdr = bytes(b[hdr_start:data_start])
     asc = i32(hdr, 36)
     desc = -i32(hdr, 40)
     contours = []
-    p, end = data_start, o + size
+    p, end = data_start, wend
     while p < end:
         typ, cb, x, y = struct.unpack_from("<IIii", b, p)
         assert typ == 1, f"0x{p:x}: 輪郭ヘッダ異常 {typ}"
@@ -181,7 +190,7 @@ def parse_rchr(b, o) -> Glyph:
             segs.append((prim, pts))
         contours.append(Contour((x, y), segs))
         p = qe
-    return Glyph(code, font_id, usage, contours, asc, desc, hdr, bytes(b[o:o + size]))
+    return Glyph(code, font_id, usage, contours, asc, desc, hdr, bytes(b[o:o + size]), bytes(tag))
 
 
 # ----------------------------------------------------------------------------
@@ -197,6 +206,7 @@ class Char:
     attrs: dict = field(default_factory=dict)  # tag(str) -> 生ペイロード(bytes, 先頭 01 00 込み)
     attr_order: list = field(default_factory=list)
     pre_raw: bytes = b"\x00" * 22
+    uscu: bool = False     # EMTR のあとに USCU（文字コードの控え）を付けるか。1 行もの（CSSL）のファイルにある
 
     @property
     def char(self):
@@ -214,6 +224,8 @@ class Char:
                             for t in self.attr_order)
             body += b"DAAR" + struct.pack("<I", 12 + len(kids)) + struct.pack("<HH", 1, len(self.attr_order)) + kids
         body += b"EMTR" + struct.pack("<I", self.code) + b"\x00" * 12
+        if self.uscu:
+            body += b"USCU" + struct.pack("<IHIII", 22, 1, 1, 1, self.code)
         return b"MCHR" + struct.pack("<I", 8 + len(body)) + body
 
 
@@ -235,8 +247,15 @@ def parse_mchr(b, o):
         p += dsz
     chunk_at(b, p, b"EMTR")
     code = u32(b, p + 4)
-    assert p + 20 == o + size, f"MCHR 0x{o:x} の長さ不一致"
-    return Char(code, gi, attrs, order, pre), size
+    p += 20
+    uscu = False
+    if p < o + size and b[p:p + 4] == b"USCU":
+        # USCU: 版 1, 1, 1, 文字コード（EMTR と同じ値）。意味は未確認
+        assert bytes(b[p:p + 22]) == b"USCU" + struct.pack("<IHIII", 22, 1, 1, 1, code), f"USCU 0x{p:x} が想定と違う"
+        uscu = True
+        p += 22
+    assert p == o + size, f"MCHR 0x{o:x} の長さ不一致"
+    return Char(code, gi, attrs, order, pre, uscu), size
 
 
 # ----------------------------------------------------------------------------
@@ -367,7 +386,7 @@ class TS1:
         self.resources = []  # [(tag, obj_or_raw)]
         for _ in range(n):
             t, cs = chunk_at(b, p)
-            if t == b"RCHR":
+            if t in (b"RCHR", b"RUCH"):
                 self.resources.append(("RCHR", parse_rchr(b, p)))
             else:
                 self.resources.append((t.decode(), bytes(b[p:p + cs])))
@@ -390,8 +409,9 @@ class TS1:
     def decorations(self, order=COLOR_ORDER):
         """先頭文字の ADCO（装飾）を読み、文字面・縁などの色と太さを返す
 
-        ADCO = u16 ver, u16 件数, 50 バイト × 件数
-          +0  u32 種別   (0 = 文字面, 9 = 縁 … サンプルより)
+        ADCO = u16 ver, u16 件数, (50 バイト + 拡張 32 バイト × ext) × 件数
+          +0  u16 種別   (0 = 文字面, 9 = 縁, 1 = 影)
+          +2  u16 ext    (1 のとき 1 件が 32 バイト長い。1 行もの（CSSL）の文字面で 1。中身は 0)
           +4  u32 色リソース番号（ORMP の添字 → CRGB）
           +28 u32 描画順? (文字面 5 / 縁 4)
           +33 u8  有効? (1)
@@ -404,11 +424,13 @@ class TS1:
         n = u16(p, 2)
         out = []
         roles = {0: ("face", "文字面"), 9: ("edge", "縁"), 1: ("shadow", "影")}
+        e = 4
         for k in range(n):
-            e = 4 + 50 * k
+            if k:
+                e += 50 + 32 * u16(p, e + 2)     # 直前の 1 件の長さ
             if e + 42 > len(p):
                 break
-            kind, res = u32(p, e), u32(p, e + 4)
+            kind, res = u16(p, e), u32(p, e + 4)
             t, raw = self.resources[res] if res < len(self.resources) else (None, None)
             color = decode_color(raw, order) if t == "CRGB" else None
             role, role_ja = roles.get(kind, ("other", f"種別 {kind}"))
@@ -460,13 +482,20 @@ class TS1:
         assert b[p:p + 4] == b"ESET"
         p += 10
         c = p
-        chunk_at(b, c, b"CSML")
+        ctag, _ = chunk_at(b, c)
+        if ctag not in (b"CSML", b"CSSL"):
+            raise ValueError(f"0x{c:x}: b'CSML' か b'CSSL' を期待したが {ctag!r}")
+        self.kind = ctag.decode()      # CSML = 文字枠つき（複数行） / CSSL = 1 行もの（枠なし）
         self.off["CSML"] = c
         self.pos = (i32(b, c + 10) / FIX, i32(b, c + 14) / FIX)  # (x, ベースライン y)
         # MCHR 列の直前の ESET を探す
         q = b.find(b"CSTR", c)
         self.off["CSTR"] = q
-        self.box = (i32(b, q + 30) / FIX, i32(b, q + 34) / FIX)  # 文字枠 (幅, 高さ)
+        self.cstr_n = u16(b, q + 4)
+        if self.cstr_n >= 8:
+            self.box = (i32(b, q + 30) / FIX, i32(b, q + 34) / FIX)  # 文字枠 (幅, 高さ)
+        else:                          # CSSL: 値 2 個 + 行の幅 + 0
+            self.box = (i32(b, q + 14) / FIX, 0.0)
         e = b.find(b"ESET", q)
         self.off["ESET_chars"] = e
         nchars = u16(b, e + 8)
@@ -616,10 +645,26 @@ class TS1:
         }
 
     # -- 再構築 -------------------------------------------------------------
+    def line_width(self):
+        """1 行もの（CSSL）の CSTR に入る行の幅 = 字送りと字間の合計 − 文字数（終端も数える）/ 256
+        （新サンプル: 150 × 3 + 1 + 4 = 455 → 454.984375 = 455 − 4/256）"""
+        lay = self.layout()
+        if not lay:
+            return 0.0
+        x0 = lay[0][2]
+        ch, g, x, _y, sc = lay[-1]
+        adv = g.advance_units() * getattr(sc, "sx", sc)
+        return (x + adv - x0) - len(self.chars) / 256.0
+
     def rebuild(self, chars=None, glyphs=None, pos=None, face_color=None, edge_color=None,
-                clear_history=False, keep_glyph_header=True, edge_width=None, color_order=COLOR_ORDER):
-        """テンプレート（self）の構造を保ったまま、文字列・グリフ・位置・色を差し替えて書き出す"""
+                clear_history=False, keep_glyph_header=True, edge_width=None, color_order=COLOR_ORDER, _line_w=None):
+        """テンプレート（self）の構造を保ったまま、文字列・グリフ・位置・色を差し替えて書き出す。
+        pos = (枠の左, ベースライン)。1 行もの（CSSL）では「元の行の幅のまま左をここに置いたときの中心」を保って、
+        新しい文言の幅に合わせて左位置と行の幅を書き直す"""
         b = self.data
+        args = dict(chars=chars, glyphs=glyphs, face_color=face_color, edge_color=edge_color, clear_history=clear_history,
+                    keep_glyph_header=keep_glyph_header, edge_width=edge_width, color_order=color_order)
+        pos_in = pos
         changed = chars is not None or glyphs is not None or pos is not None or edge_width is not None
         chars = self.chars if chars is None else chars
         glyphs = self.glyphs if glyphs is None else glyphs
@@ -657,6 +702,8 @@ class TS1:
         c = self.off["CSML"]
         e = self.off["ESET_chars"]
         csml_head = bytearray(b[c:e])
+        if _line_w is not None:
+            struct.pack_into("<i", csml_head, self.off["CSTR"] - c + 14, fx(_line_w))
         dx = dy = 0.0
         if pos is not None:
             dx, dy = pos[0] - self.pos[0], pos[1] - self.pos[1]
@@ -680,11 +727,11 @@ class TS1:
                         struct.pack_into("<I", a, e0 + 4, u32(a, e0 + 4) + shift)
                     if edge_width is not None and d["role"] == "edge":
                         struct.pack_into("<II", a, e0 + 34, int(round(edge_width)), int(round(edge_width)))
-                ch = Char(ch.code, ch.glyph_index, {**ch.attrs, "ADCO": bytes(a)}, ch.attr_order, ch.pre_raw)
+                ch = Char(ch.code, ch.glyph_index, {**ch.attrs, "ADCO": bytes(a)}, ch.attr_order, ch.pre_raw, ch.uscu)
             mchr += ch.encode()
         eset = b"ESET" + b"\x00" * 4 + struct.pack("<H", len(chars))
         csml_body = bytes(csml_head[8:]) + eset + bytes(mchr)
-        csml = b"CSML" + struct.pack("<I", 8 + len(csml_body)) + csml_body
+        csml = self.kind.encode() + struct.pack("<I", 8 + len(csml_body)) + csml_body
 
         s = self.off["SLYR"]
         slyr_body = b[s + 8:c] + csml
@@ -699,16 +746,21 @@ class TS1:
         tsrc_body = b[8:sw] + swrk
         out = bytearray(b"TSRC" + struct.pack("<I", 8 + len(tsrc_body)) + tsrc_body)
 
+        # ---- 1 行もの: 文言が変わったら行の幅と左位置を書き直す（中心は動かさない）
+        if self.kind == "CSSL" and _line_w is None and changed:
+            tmp = TS1(bytes(out))
+            w = tmp.line_width()
+            if abs(w - self.box[0]) > 1e-6:
+                left, base = pos_in if pos_in is not None else self.pos
+                return self.rebuild(pos=(left + self.box[0] / 2 - w / 2, base), _line_w=w, **args)
+
         # ---- OFRI 描画範囲の更新
         if changed:
             tmp = TS1(bytes(out))
             bb = None
-            try:    # VWS と同じ描き方で実際に描いて範囲を出す（見本では OFRI と 4 辺とも一致）
+            try:    # VWS と同じ式で範囲を出す（VWS が保存した 3 種類のファイルの OFRI と 4 辺とも一致）
                 import vwsrender
                 bb = vwsrender.drawn_bbox(tmp)
-                # 画面の端にかかるときは描いた範囲が切れているので、輪郭からの見積もりに任せる
-                if bb and (bb[0] <= 0 or bb[1] <= 0 or bb[2] >= 1920 or bb[3] >= 1080):
-                    bb = None
             except Exception:
                 bb = None
             if bb is None:
@@ -734,8 +786,24 @@ class TS1:
 # ----------------------------------------------------------------------------
 # フォントファイルからグリフ生成（fontTools）
 # ----------------------------------------------------------------------------
+def _split_qspline(ip):
+    """制御点が続く 2 次スプライン（最後だけ線上の点）→「制御点 1 + 終点 1」のレコードの列。
+    VWS は 1 レコード 2 点の曲線しか正しく読まない（3 点以上を入れると字が崩れる。VWS 実機で確認）。
+    間の線上の点は、隣り合う制御点の中点を整数で作る（VWS と同じく、足してから 0 方向へ切り捨て）"""
+    out = []
+    for i in range(len(ip) - 1):
+        c = ip[i]
+        if i == len(ip) - 2:
+            e = ip[i + 1]
+        else:
+            e = (int((ip[i][0] + ip[i + 1][0]) / 2), int((ip[i][1] + ip[i + 1][1]) / 2))
+        out.append((PRIM_QSPLINE, [c, e]))
+    return out
+
+
 class FontGlyphSource:
-    """TTF/OTF からアウトラインを取り出し、VWS 形式（2048 セル・y 下向き・2次スプライン）へ変換"""
+    """TTF/OTF からアウトラインを取り出し、VWS 形式（2048 セル・y 下向き・2次スプライン）へ変換。
+    VWS の字形と点の位置までは一致しない（近似）。Windows にフォントが入っていれば gdiglyph.GdiGlyphSource を使うこと"""
 
     def __init__(self, path, font_number=0, fit=None):
         """fit = {"scale", "ox", "oy"}: fontid で実測した「フォント単位 → VWS の 2048 セル」の変換。
@@ -801,12 +869,12 @@ class FontGlyphSource:
                     if cur is None:
                         cur = P(mid)
                     pts = pts + [mid]
-                segs.append((PRIM_QSPLINE, [P(p) for p in pts]))
+                segs += _split_qspline([P(p) for p in pts])
                 last = pts[-1]
             elif op == "curveTo":
                 from fontTools.cu2qu import curve_to_quadratic
                 q = curve_to_quadratic([last] + list(args), 1.0 / sc)
-                segs.append((PRIM_QSPLINE, [P(p) for p in q[1:]]))
+                segs += _split_qspline([P(p) for p in q[1:]])
                 last = args[-1]
             elif op in ("closePath", "endPath"):
                 if cur is not None and segs:
@@ -831,6 +899,7 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
     codes = [newline_code if c == "\n" else ord(c) for c in text] + [0]
 
     # グリフ表: テンプレート同様、末尾の文字から順に登録（先頭は空グリフ）
+    gtag = template.glyphs[0].tag if template.glyphs else b"RCHR"
     order = [0]
     for c in reversed(codes):
         if c not in order and c not in (0x0A, newline_code):
@@ -842,12 +911,13 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
             g = font.glyph(c, fid, usage[c])
         elif c in tmpl_glyphs:
             src = tmpl_glyphs[c]
-            g = Glyph(c, src.font_id, usage[c], src.contours, src.ascent, src.descent, src.header_raw, None)
+            g = Glyph(c, src.font_id, usage[c], src.contours, src.ascent, src.descent, src.header_raw, None, src.tag)
         elif c == 0:
             g = Glyph(0, fid, 1, [], 1802, 246)
         else:
             raise KeyError(f"テンプレートに無い文字です（--font でフォントを指定してください）: {chr(c)}")
         g.usage = usage[c]
+        g.tag = gtag
         if g.rchr_raw is None and g.header_raw is not None:
             # 使用回数だけ変わる場合もヘッダはそのまま
             pass
@@ -865,12 +935,12 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                 attrs["ACTP"] = struct.pack("<HI", 1, font_id)
             if spacing is not None and "ACSP" in attrs:
                 attrs["ACSP"] = struct.pack("<Hi", 1, fx(spacing[0]))
-            chars.append(Char(c, index.get(c, 0), attrs, order_t))
+            chars.append(Char(c, index.get(c, 0), attrs, order_t, uscu=first.uscu))
         elif c == 0:
-            chars.append(Char(0, 0))
+            chars.append(Char(0, 0, uscu=first.uscu))
         elif spacing is not None and i < len(spacing) and (spacing[i] != spacing[i - 1] or spacing[i] != 0):
             # 字間が変わる文字・0 以外の文字には ACSP を明示（「その文字だけ」「以降継続」どちらの解釈でも同じ結果になる）
-            chars.append(Char(c, index.get(c, 0), {"ACSP": struct.pack("<Hi", 1, fx(spacing[i]))}, ["ACSP"]))
+            chars.append(Char(c, index.get(c, 0), {"ACSP": struct.pack("<Hi", 1, fx(spacing[i]))}, ["ACSP"], uscu=first.uscu))
         else:
-            chars.append(Char(c, index.get(c, 0)))
+            chars.append(Char(c, index.get(c, 0), uscu=first.uscu))
     return chars, glyphs

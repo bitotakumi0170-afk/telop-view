@@ -63,6 +63,11 @@ SCHEMA = {
     "CRGB": [("ver", "u16", ""), ("type", "u32", "色種別 (1 = 単色)"), ("color", "rgba", "R G B A")],
     "ORSC": [("ver", "u16", ""), ("value", "u32", "不明 (0)")],
     "VIDT": [],
+    "MSCR": [("ver", "u16", ""), ("value", "b8", "不明 (0)。1 行もの（CSSL）のファイルにだけある")],
+    "RBID": [("ver", "u16", ""), ("a", "u32", "不明 (4)"), ("rest", "b16", "")],
+    "PROP": [("ver", "u16", ""), ("a", "u32", "不明 (4)"), ("rest", "b14", "")],
+    "EASG": [("ver", "u16", ""), ("rest", "b16", "")],
+    "USCU": [("ver", "u16", ""), ("a", "u32", "不明 (1)"), ("count", "u32", "コード数 (1)"), ("code", "u32", "文字コード（EMTR と同じ）")],
     "MVP_": [("ver", "u16", ""), ("type", "u16", "移動種別 (2)"), ("v0", "fx", ""), ("v1", "fx", ""),
              ("v2", "fx", ""), ("move", "fx", "移動量 px（イン -50 / アウト +50。XTRS の 位置B = 位置A + 移動量）")],
     "3FLG": [("ver", "u16", ""), ("flag", "u16", "不明")],
@@ -136,6 +141,8 @@ class Dumper:
         o += 18
         for tag in ("OFRI", "OOCI", "OOCO"):
             o = self.simple(f"SWRK/{tag}", o)
+        while b[o:o + 4] not in (b"OMR0", b""):      # 1 行もの（CSSL）のファイルには MSCR がある
+            o = self.simple(f"SWRK/{b[o:o + 4].decode('latin1')}", o)
         o = self.omr0("SWRK/OMR0", o)
         if b[o:o + 4] == b"ODTT":
             o = self.odtt("SWRK/ODTT", o)
@@ -192,9 +199,9 @@ class Dumper:
             k = counts.get(t, 0)
             counts[t] = k + 1
             cp = f"{path}/{t}[{k}]"   # 種類ごとの通し番号（グリフ数が変わってもずれない）
-            if t == "RCHR":
+            if t in ("RCHR", "RUCH"):
                 code = struct.unpack_from("<I", b, p + 22)[0]
-                cp = f"{path}/RCHR'{chr(code) if code else '終端'}'"
+                cp = f"{path}/RCHR'{chr(code) if code else '終端'}'"   # RUCH も同じ名前で並べる（比較しやすいように）
                 _, rs = self.hdr(cp, p)
                 self.fields(cp, p + 8, p + 26, [("ver", "u16", ""), ("usage", "u16", "使用回数"), ("zero", "u16", ""),
                                                  ("font_id", "u32", "フォント番号"), ("zero2", "u32", ""),
@@ -210,6 +217,8 @@ class Dumper:
                     ("font_id", "u32", ""), ("code", "u32", ""), ("ascent", "i32", ""), ("descent", "i32", ""),
                     ("abcA", "i32", ""), ("abcB", "i32", ""), ("abcC", "i32", ""), ("zero", "u32", "")])
                 self.add(cp + "/WVCT", h + 60, dl, "outline", f"{dl} バイト", "輪郭データ")
+                if h + 60 + dl < p + rs:      # RUCH: WVCT のあとに コード数 + 文字コード
+                    self.fields(cp, h + 60 + dl, p + rs, [("ucount", "u32", "コード数 (1)"), ("ucode", "u32", "文字コード")])
                 p += rs
             else:
                 p = self.simple(cp, p)
@@ -223,12 +232,12 @@ class Dumper:
         p = self.add(path, p, 2, "u16", struct.unpack_from("<H", b, p)[0], "不明")
         p, n = self.eset(path, p)
         for i in range(n):
-            p = self.csml(f"{path}/CSML[{i}]", p)
+            p = self.csml(f"{path}/CSML[{i}]", p)     # CSSL（1 行もの）も同じ名前で並べる
         return o + size
 
     def csml(self, path, o):
         b = self.b
-        _, size = self.hdr(path, o, "CSML")
+        _, size = self.hdr(path, o)
         end = o + size
         p = self.fields(path, o + 8, o + 26, [("ver", "u16", ""), ("x", "fx", "文字枠の左 px"), ("y", "fx", "ベースライン px"),
                                                ("a", "i32", "不明 (-1)"), ("b", "u16", "不明 (0)"), ("c", "u16", "不明 (1)")])
@@ -248,10 +257,15 @@ class Dumper:
             elif t == "CSTR":
                 n = struct.unpack_from("<H", b, p + 4)[0]
                 self.add(cp, p, 6, "(tag+count)", f"CSTR {n}")
-                names = [("scale_x", "倍率 X %?"), ("v1", ""), ("scale_y", "倍率 Y %?"), ("v3", ""), ("v4", ""), ("v5", ""),
-                         ("box_w", "文字枠の幅 px"), ("box_h", "文字枠の高さ px")]
+                if n >= 8:
+                    names = [("scale_x", "倍率 X %?"), ("v1", ""), ("scale_y", "倍率 Y %?"), ("v3", ""), ("v4", ""), ("v5", ""),
+                             ("box_w", "文字枠の幅 px"), ("box_h", "文字枠の高さ px")]
+                    cnt = n
+                else:   # CSSL: 件数 2 と書かれているが値は 4 つ（0, 0, 行の幅, 0）
+                    names = [("v0", ""), ("v1", ""), ("line_w", "行の幅 px（字送りと字間の合計）"), ("v3", "")]
+                    cnt = 4
                 q = p + 6
-                for i in range(n):
+                for i in range(cnt):
                     nm, note = names[i] if i < len(names) else (f"v{i}", "")
                     q = self.add(cp, q, 4, nm, struct.unpack_from("<i", b, q)[0] / 256.0, note)
                 p = q
@@ -275,8 +289,10 @@ class Dumper:
             p = self.fields(path, p, p + 24, [("x0", "fx", "位置 A x"), ("y0", "fx", "位置 A y"), ("z0", "fx", ""),
                                                ("x1", "fx", "位置 B x"), ("y1", "fx", "位置 B y"), ("z1", "fx", "")])
         p = self.fields(path, p, p + 25, [("u8", "u8", "")] + [(f"scale{i}", "u32", "倍率 % (100)") for i in range(6)])
-        self.fields(path, p, vid if vid > 0 else end, [("zero3", "b23", ""), ("opacity0", "u16", "不透明度 %? (100)"),
-                                                         ("opacity1", "u16", "不透明度 %? (100)")])
+        q = self.fields(path, p, min(p + 27, vid if vid > 0 else end),
+                        [("zero3", "b23", ""), ("opacity0", "u16", "不透明度 %? (100)"), ("opacity1", "u16", "不透明度 %? (100)")])
+        if q < (vid if vid > 0 else end):
+            self.add(path, q, (vid if vid > 0 else end) - q, "rest", None, "未解明")
         if vid > 0:
             q = self.simple(path + "/VIDT", vid)
             if q < end:
@@ -287,7 +303,9 @@ class Dumper:
         b = self.b
         _, size = self.hdr(path, o, "MCHR")
         end = o + size
-        code = struct.unpack_from("<I", b, end - 16)[0]
+        uscu = b[end - 22:end - 18] == b"USCU"
+        emtr_end = end - 22 if uscu else end
+        code = struct.unpack_from("<I", b, emtr_end - 16)[0]
         p = self.fields(path, o + 8, o + 34, [("ver", "u16", ""), ("glyph", "u16", "グリフ番号"), ("zero", "b22", "")])
         if b[p:p + 4] == b"DAAR":
             _, ds = self.hdr(path + "/DAAR", p)
@@ -302,7 +320,9 @@ class Dumper:
                     q = self.simple(f"{path}/DAAR/{t}", q)
             p += ds
         self.add(path, p, 4, "(tag)", "EMTR")
-        self.fields(path, p + 4, end, [("code", "u32", "文字 " + (chr(code) if code else "(終端)")), ("zero", "b12", "")])
+        self.fields(path, p + 4, emtr_end, [("code", "u32", "文字 " + (chr(code) if code else "(終端)")), ("zero", "b12", "")])
+        if uscu:
+            self.simple(path + "/USCU", emtr_end)
         return end
 
     def adco(self, path, o):
@@ -312,11 +332,14 @@ class Dumper:
         self.fields(path, o + 8, o + 12, [("ver", "u16", ""), ("count", "u16", "装飾数")])
         p = o + 12
         for i in range(n):
-            self.fields(f"{path}/[{i}]", p, p + 50, [
-                ("kind", "u32", "0 = 文字面 / 9 = 縁 / 1 = 影"), ("color_res", "u32", "色リソース番号"),
+            ext = struct.unpack_from("<H", b, p + 2)[0]
+            ln = 50 + 32 * ext
+            self.fields(f"{path}/[{i}]", p, p + ln, [
+                ("kind", "u16", "0 = 文字面 / 9 = 縁 / 1 = 影"), ("ext", "u16", "1 のとき後ろに 32 バイト付く（1 行ものの文字面で 1）"),
+                ("color_res", "u32", "色リソース番号"),
                 ("zero", "b20", ""), ("order", "u16", "不明 (4 か 5)"), ("extra", "u16", "太さへの追加分 px（外へ広がる量 = 太さ + これ）"),
                 ("u8a", "u8", ""), ("enable", "u8", "1 = 有効 / 0 = 無効"), ("width", "u32", "太さ px"), ("width2", "u32", "太さ 2 px"), ("zero2", "b8", "")])
-            p += 50
+            p += ln
         if p < o + size:
             self.add(path, p, o + size - p, "rest", None, "未解明")
         return o + size

@@ -62,11 +62,24 @@ def cmd_to_psd(a):
         print("保存:", a.jsx)
 
 
+def _gdi_source(a, tmpl):
+    """--face が指定されていれば、Windows の GDI から VWS と同じ字形を作る元を返す"""
+    if not getattr(a, "face", None):
+        return None
+    import gdiglyph
+    fid = a.font_id if a.font_id is not None else tmpl.font_id
+    shift = a.y_shift if a.y_shift is not None else gdiglyph.measure_shift(tmpl, a.face, font_id=fid)
+    if shift is None:
+        raise SystemExit(f"「{a.face}」の字形がテンプレートの字形と一致しません（別のフォントか、--y-shift の指定が必要です）")
+    return gdiglyph.GdiGlyphSource(a.face, shift)
+
+
 def cmd_from_psd(a):
     from psdbridge import psd_to_ts1
     tmpl = load(a.template)
     out, info = psd_to_ts1(a.psd, tmpl, font_path=a.font, layer_name=a.layer,
-                           font_id=a.font_id, color_order=a.color_order, clear_history=a.clear_history)
+                           font_id=a.font_id, color_order=a.color_order, clear_history=a.clear_history,
+                           glyph_font=_gdi_source(a, tmpl), prefer_template=bool(getattr(a, "face", None)))
     with open(a.out, "wb") as f:
         f.write(out)
     print("PSD から読み取り:", json.dumps({k: v for k, v in info.items()}, ensure_ascii=False, default=str))
@@ -76,13 +89,14 @@ def cmd_from_psd(a):
 
 def cmd_text(a):
     tmpl = load(a.template)
-    font = FontGlyphSource(a.font) if a.font else None
+    font = _gdi_source(a, tmpl) or (FontGlyphSource(a.font) if a.font else None)
     text = a.text.replace("\\n", "\n")
     sp = None
     if a.spacing is not None:
         sp = [a.spacing] * (len(text) + 1)
     size = (a.size, a.size) if a.size else None
-    chars, glyphs = build_text(tmpl, text, font=font, spacing=sp, size=size, font_id=a.font_id)
+    chars, glyphs = build_text(tmpl, text, font=font, spacing=sp, size=size, font_id=a.font_id,
+                               prefer_template=bool(a.face))
     pos = (a.x, a.y) if a.x is not None and a.y is not None else None
     out = tmpl.rebuild(chars=chars, glyphs=glyphs, pos=pos, clear_history=a.clear_history)
     with open(a.out, "wb") as f:
@@ -154,7 +168,8 @@ def cmd_selftest(a):
 
     check("解析→そのまま再構築でバイト一致", t.rebuild() == d)
     check("全グリフの輪郭データが再エンコードで一致",
-          all(g.rchr_raw[len(g.rchr_raw) - len(g.encode_contours()):] == g.encode_contours() for g in t.glyphs))
+          all(g.encode_contours() in g.rchr_raw and g.encode(keep_header=False)[:4] == g.rchr_raw[:4]
+              and len(g.encode(keep_header=False)) == len(g.rchr_raw) for g in t.glyphs))
     chars, glyphs = build_text(t, t.text, spacing=t.spacings())
     t2 = TS1(t.rebuild(chars=chars, glyphs=glyphs))
     check("同じ文言で組み直し → 文字列が一致", t2.text == t.text)
@@ -163,8 +178,8 @@ def cmd_selftest(a):
     bb = vwsrender.drawn_bbox(t)     # VWS と同じ描き方で描いた範囲（影つきは推定を含む）
     if bb is None:
         bb = t.ink_bbox(edge=(t.edge_width() or 6) + 1)
-    check(f"描いてみた範囲 {tuple(round(v) for v in bb)} が OFRI {tuple(round(v) for v in t.ofri_bbox)} と ±1px 以内",
-          all(abs(x - y) <= 1 for x, y in zip(bb, t.ofri_bbox)))
+    check(f"式で出した描画範囲 {tuple(round(v) for v in bb)} が OFRI {tuple(round(v) for v in t.ofri_bbox)} と一致",
+          all(abs(x - y) < 0.5 for x, y in zip(bb, t.ofri_bbox)))
     sys.exit(0 if ok else 1)
 
 
@@ -210,7 +225,9 @@ def main():
             p.add_argument("--size", type=float); p.add_argument("--spacing", type=float)
             p.add_argument("--x", type=float); p.add_argument("--y", type=float)
         p.add_argument("-o", "--out", required=True)
-        p.add_argument("--font", help="グリフを取り出す TTF/OTF（省略時はテンプレート内の字形のみ使用可）")
+        p.add_argument("--font", help="グリフを取り出す TTF/OTF（省略時はテンプレート内の字形のみ使用可。字形は近似）")
+        p.add_argument("--face", help="Windows に入っている書体名（例: FOT-ニューロダン Pro B）。VWS と同じ字形データを作る")
+        p.add_argument("--y-shift", type=int, help="--face の縦位置のずれ（省略時はテンプレートの字形から実測）")
         p.add_argument("--font-id", type=lambda s: int(s, 0), help="VWS フォント番号（既定: テンプレートと同じ）")
         p.add_argument("--clear-history", action="store_true", help="編集履歴(OMR0)を空にする")
         p.set_defaults(f=f)
