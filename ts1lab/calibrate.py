@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from ts1core import COLOR_ORDER
-from render import render_layers, flatten_contour, fill_nonzero
+from render import render_layers, flatten_contour, fill_nonzero, RENDER_OFFSET
 
 
 def _paste(canvas_hw, layer, l, t):
@@ -65,12 +65,14 @@ def compare(ts1, ref_path, color_order=COLOR_ORDER, diff_path=None, search=True)
 
     e0 = ts1.edge_width() or 6
     best = None
-    grid_off = [(dx, dy) for dx in np.arange(-0.5, 0.51, 0.125) for dy in np.arange(-0.75, 0.51, 0.125)] if search else [(0, 0)]
+    # 描画モデルの既定位置 (RENDER_OFFSET) の周り ±0.125px を 1/16px 刻みで探す
+    grid_off = [(RENDER_OFFSET[0] + dx, RENDER_OFFSET[1] + dy) for dx in np.arange(-0.125, 0.126, 0.0625)
+                for dy in np.arange(-0.125, 0.126, 0.0625)] if search else [RENDER_OFFSET]
     for off in grid_off:  # まず位置
         s, _, _ = score(off, e0)
         if best is None or s < best[0]:
             best = (s, off, e0)
-    for e in ([e0 - 0.5, e0 - 0.25, e0 + 0.25, e0 + 0.5] if search else []):  # 次に縁幅
+    for e in ([e0 - 1, e0 - 0.5, e0 + 0.5, e0 + 1] if search else []):  # 次に縁幅（ずらし重ねの半径が変わる刻み）
         s, _, _ = score(best[1], e)
         if s < best[0]:
             best = (s, best[1], e)
@@ -95,6 +97,7 @@ def compare(ts1, ref_path, color_order=COLOR_ORDER, diff_path=None, search=True)
                          for c in g.contours]
                 m = fill_nonzero(polys, (x1 - x0) * ss, (y1 - y0) * ss)
                 m = np.asarray(Image.fromarray((m * 255).astype(np.uint8)).resize((x1 - x0, y1 - y0), Image.BOX)) / 255.0
+                m[:-1] = (m[:-1] + m[1:]) / 2  # VWS の上下 2 ライン平均
                 err = np.abs(m - ref).sum()
                 if bb is None or err < bb[0]:
                     bb = (err, dx, dy)

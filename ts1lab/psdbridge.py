@@ -158,24 +158,31 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
   executeAction(c("setd"), d, DialogModes.NO);
 })();
 
-// ---- 参考: TS1 から再現した画像を非表示レイヤで重ねる（位置合わせ確認用）
+// ---- VWS の見た目そのものの画像レイヤ（TS1 から VWS と同じ描き方で作った PNG）を一番上に置く
+//      VWS の縁は「ずらし重ね」＋上下 2 ライン平均なので、Photoshop の文字＋境界線では同じ絵にならない。
+//      見た目はこの画像レイヤ、編集は下のテキストレイヤ、と役割を分ける（PSD → TS1 はテキストレイヤを読む）
 var here = File($.fileName).parent;
+var EXACT = false;
 (function(){
   var png = new File(here + "/" + SPEC.ref_png);
-  if (!png.exists) return;
+  if (!SPEC.ref_png || !png.exists) return;
   var pd = app.open(png);
-  var dup = pd.activeLayer.duplicate(doc, ElementPlacement.PLACEATEND);
+  var dup = pd.activeLayer.duplicate(doc, ElementPlacement.PLACEATBEGINNING);
   pd.close(SaveOptions.DONOTSAVECHANGES);
   app.activeDocument = doc;
-  dup.name = "参考：VWS再現（TS1から）";
-  dup.visible = false;
+  dup.name = "VWSの見た目（正確な画像・編集不可）";
+  dup.visible = true;
+  lay.name = "編集用テキスト：" + lay.name;
+  lay.visible = false;
+  EXACT = true;
 })();
 
 app.preferences.rulerUnits = oldRuler; app.preferences.typeUnits = oldType;
 var out = new File(here + "/" + SPEC.name + ".psd");
 var opt = new PhotoshopSaveOptions(); opt.layers = true;
 doc.saveAs(out, opt, true);
-alert("保存しました: " + out.fsName + "\nフォント: " + FONT);
+alert("保存しました: " + out.fsName + "\nフォント: " + FONT +
+      (EXACT ? "\n\n上のレイヤ = VWS の見た目そのものの画像です。\n文字を直すときは、上の画像レイヤを非表示にして「編集用テキスト」を表示・編集し、\nその PSD を「3_PSDをTS1に変換」に入れてください。" : ""));
 """
 
 
@@ -185,8 +192,9 @@ def baseline_shift(size, font_fit):
     return (font_fit or {}).get("oy", 0.0) * size / CELL
 
 
-# VWS の描画は数式上の位置から (-0.125, -0.375)px ずれる（ラスタライザの癖。VWS 出力 PNG との照合で確認、
-# Photoshop との直接照合でも縦 -0.42px を実測）。Photoshop のアンカーにこの分を足し、PSD → TS1 では引く
+# VWS の絵は、普通に描いた絵（Photoshop のテキスト）に対して見かけ上 (-0.125, -0.375)px ずれる。
+# 正体は VWS の描画位置 (-0.0625, +0.094) と上下 2 ライン平均（見かけ -0.5px）の合計（render.py 参照）。
+# Photoshop との直接照合でも縦 -0.42px を実測。Photoshop のアンカーにこの分を足し、PSD → TS1 では引く
 VWS_RASTER_OFFSET = (-0.125, -0.375)
 # cell_ratio がこれより 1 に近いフォントは、Photoshop のサイズ = VWS のサイズにして全角送りを完全に一致させる
 # （トラッキングは整数なので 0.018/1000em のような送り補正は表せず、16 文字で 0.3px ずれていた）

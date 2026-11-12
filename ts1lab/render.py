@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from ts1core import COLOR_ORDER, PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE
 
@@ -67,49 +67,75 @@ def fill_nonzero(polys, w, h):
     return np.cumsum(acc, axis=1)[:, :w] != 0
 
 
-# 見本画像（VWS 出力）との照合で求めた描画オフセット px（文字面・縁とも ±0.1px 程度まで一致）
-RENDER_OFFSET = (-0.125, -0.375)
+# VWS の描き方（見本の VWS 出力 PNG の画素値から特定。2026-11-12）
+#   1. 文字面を画素の被覆率で塗る（位置は数式上の位置 + RENDER_OFFSET）
+#   2. 縁 = 文字面を 1px 刻みでずらしたコピーの重ね（最大値）。ずらし量は i^2 + j^2 <= (縁 + 0.5)^2 の全整数点
+#      （縁 6px なら (±6,2) (±5,4) (±4,5) (±2,6) の階段。丸い縁ではなく、斜めが少し太い。「回」の角の画素値で確認）
+#   3. 文字面・縁とも上下 2 ラインの平均（out[y] = (in[y] + in[y+1]) / 2。縦の辺だけ 2 画素にまたがる）
+# このモデルと VWS 出力の差は premultiplied 平均差 0.94%（丸い縁 + フィルタなしの旧モデルは 2.74%）
+RENDER_OFFSET = (-0.0625, 0.09375)
+# 旧モデル（丸い縁・縦フィルタなし）で合わせたときのオフセット。縦フィルタの -0.5px を含んだ見かけの値
+RENDER_OFFSET_LEGACY = (-0.125, -0.375)
 
 
-def render_layers(ts1, edge=None, ss=4, canvas=(1920, 1080), colors=None, color_order=COLOR_ORDER,
-                  offset=RENDER_OFFSET):
-    """(face RGBA, edge RGBA, (left, top)) を返す。画像はテロップ範囲だけ切り出し"""
+def edge_offsets(edge):
+    """VWS の縁のずらし量（整数点の円板）"""
+    r2 = (edge + 0.5) ** 2
+    n = int(np.floor(edge + 0.5))
+    return [(i, j) for i in range(-n, n + 1) for j in range(-n, n + 1) if i * i + j * j <= r2]
+
+
+def coverage_layers(ts1, edge=None, ss=8, offset=RENDER_OFFSET, vfilter=True):
+    """(文字面の被覆率, 縁込みの被覆率, (left, top)) を float 配列 (0..1) で返す"""
     edge = ts1.edge_width() if edge is None else edge
     edge = edge or 0
-    face_rgb = tuple(ts1.face_color(color_order)[:3])
-    edge_rgb = tuple(ts1.edge_color(color_order)[:3])
-
-    items = ts1.layout()
-    bb = ts1.ink_bbox(edge=edge + 2)
+    bb = ts1.ink_bbox(edge=edge + 3)
     if bb is None:
         return None
     left, top = int(np.floor(bb[0])), int(np.floor(bb[1]))
     right, bottom = int(np.ceil(bb[2])), int(np.ceil(bb[3]))
     W, H = right - left, bottom - top
     polys = []
-    for ch, g, x, y, sc in items:
+    for ch, g, x, y, sc in ts1.layout():
         for c in g.contours:
-            pts = flatten_contour(c, (x + offset[0] - left) * ss, (y + offset[1] - top) * ss, sc * ss)
-            polys.append(pts)
-    face = fill_nonzero(polys, W * ss, H * ss)
-    face_img = Image.fromarray((face * 255).astype(np.uint8), "L")
-
-    edge_img = face_img.copy()
+            polys.append(flatten_contour(c, (x + offset[0] - left) * ss, (y + offset[1] - top) * ss, sc * ss))
+    cf = fill_nonzero(polys, W * ss, H * ss).reshape(H, ss, W, ss).mean((1, 3))
+    ce = cf
     if edge > 0:
-        d = ImageDraw.Draw(edge_img)
-        r = edge * ss
-        for pts in polys:
-            d.line(pts + [pts[0]], fill=255, width=int(2 * r), joint="curve")
-            for x, y in pts[::2]:
-                d.ellipse((x - r, y - r, x + r, y + r), fill=255)
+        offs = edge_offsets(edge)
+        n = max(max(abs(i), abs(j)) for i, j in offs)
+        p = np.pad(cf, n)
+        ce = np.zeros_like(cf)
+        for i, j in offs:
+            np.maximum(ce, p[n + j:n + j + H, n + i:n + i + W], out=ce)
+    if vfilter:
+        def vavg(c):
+            o = c.copy()
+            o[:-1] = (c[:-1] + c[1:]) / 2
+            o[-1] = c[-1] / 2
+            return o
+        cf, ce = vavg(cf), vavg(ce)
+    return cf, ce, (left, top)
 
-    def colorize(mask, rgb):
-        a = mask.resize((W, H), Image.BOX)
-        im = Image.new("RGBA", (W, H), rgb + (0,))
-        im.putalpha(a)
+
+def render_layers(ts1, edge=None, ss=8, canvas=(1920, 1080), colors=None, color_order=COLOR_ORDER,
+                  offset=RENDER_OFFSET, vfilter=True):
+    """(face RGBA, edge RGBA, (left, top)) を返す。画像はテロップ範囲だけ切り出し。
+    edge を face の下に重ねると VWS の出力と同じ絵になる"""
+    r = coverage_layers(ts1, edge=edge, ss=ss, offset=offset, vfilter=vfilter)
+    if r is None:
+        return None
+    cf, ce, lt = r
+    face_rgb = tuple(ts1.face_color(color_order)[:3])
+    edge_rgb = tuple(ts1.edge_color(color_order)[:3])
+
+    def colorize(cov, rgb):
+        im = Image.new("RGBA", (cov.shape[1], cov.shape[0]), rgb + (0,))
+        # VWS は被覆率を 256 倍して 255 で頭打ちにしている（0.875 → 224、0.375 → 96）
+        im.putalpha(Image.fromarray(np.clip(np.round(cov * 256), 0, 255).astype(np.uint8), "L"))
         return im
 
-    return colorize(face_img, face_rgb), colorize(edge_img, edge_rgb), (left, top)
+    return colorize(cf, face_rgb), colorize(ce, edge_rgb), lt
 
 
 def render_preview(ts1, canvas=(1920, 1080), bg=(40, 60, 90), **kw):
