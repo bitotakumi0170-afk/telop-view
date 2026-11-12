@@ -5,6 +5,10 @@
         … 見本をもとに、条件を 1 つずつ変えた .ts1 と「予想の見た目」PNG を作る
   python vwstest.py extra 見本.ts1 [出力フォルダ]
         … 追加の確認用（半角入り・2 行・横 85%・サイズ 30・空白入り・ニューロダン EB）と、フォント番号調べ用の .ts1 を作る
+  python vwstest.py probe 見本.ts1 [出力フォルダ]
+        … 第 3 回の確認用（字送りの 1/256px 調べ・半角のあと・縁 4/7/8/9/12px・縦位置の端数・ニューロダン EB）を作る
+  python vwstest.py origins フォルダ
+        … 字ごとに「VWS の PNG と合う原点」を求め、式で出した位置との差を 1/8px 単位で出す（字送り調べ 31〜34 の読み取り用）
   python vwstest.py check フォルダ
         … 「○○.png」か「[○○].png」（VWS の書き出し）があれば、同じ名前の .ts1 と画素単位で照合する
 
@@ -170,6 +174,91 @@ def make_extra(src, outdir):
     print(f"  → {outdir}（やり方.txt を見てください）")
 
 
+PROBE_RULER = "いいいいいいいいいいいい"
+PROBE_LINES = [                    # (行の文言, 何を見るか)
+    ("いでいい", "で（右の余白 8/2048）"),
+    ("いグいい", "グ（右の余白 2/2048）"),
+    ("いガいい", "ガ（右の余白 8/2048。で と同じ余白で別の字）"),
+    ("いひいい", "ひ（右の余白 12/2048。濁点の無い字）"),
+    ("いがいい", "が（右の余白 22/2048）"),
+    ("いCでいい", "半角 1 字のあとの で"),
+    ("いabcB3でいい", "半角 5 字のあとの で（21_半角入りと同じ「3 のあと」）"),
+]
+
+
+def make_probe(src, outdir):
+    """第 3 回の確認用。
+
+    字送り調べ（31・32・33）の考え方:
+      VWS は字を 1/256px の整数で並べ、原点を 1/8px（= 32/256）へ切り捨てて描く。だから「原点が 32 の倍数より 1 つ手前（余り 31）」に
+      なるよう枠の位置を 1/256px 単位で決めておくと、字送りが式より 1/256px でも長い字のあとは、うしろの字が 1/8px 右へ動いて見える。
+      余り 0 にしておくと、逆に 1/256px 短い字のあとが 1/8px 左へ動く。1 行目（「い」だけの長い行。い の字送りは 100px ちょうどと確認済み）が
+      枠の中の左端を決めるので、2 行目以降はそれぞれ独立に 1 字ずつ調べられる。
+      きっかけ: 21_半角入り の「で」だけ、式より 1/256px 左に描かれていた（「で」の字送りが 1/256px 長いと考えると 249 字すべて合う）
+    """
+    import gdiglyph
+    cfg = run.load_config()
+    with open(src, "rb") as f:
+        t = TS1(f.read())
+    e = run.font_for_id(cfg, t.font_id, t)
+    font = run.glyph_source(cfg, t.font_id, e, t)
+    if font is None:
+        print("  フォントが PC に無いため作れません")
+        return
+    os.makedirs(outdir, exist_ok=True)
+
+    def retext(text, fnt=font, font_id=None, prefer=True):
+        chars, glyphs = build_text(t, text, font=fnt, spacing=[0.0] * (len(text) + 1), font_id=font_id, prefer_template=prefer)
+        return dict(chars=chars, glyphs=glyphs)
+
+    def aligned(text, rem):
+        """枠の中の左端（1/256px）を 32 で割った余りが rem になるように、枠の x を 1/256px 単位でずらして作る"""
+        t2 = TS1(t.rebuild(**retext(text)))
+        x0, bw = int(round(t2.pos[0] * 256)), int(round(t2.box[0] * 256))
+        start = x0 + (bw - max(t2.line_widths_fx())) // 2
+        x0 += (rem - start) % 32
+        out = t2.rebuild(pos=(x0 / 256.0, t2.pos[1]))
+        t3 = TS1(out)
+        assert t3.layout_fx()[0][2] % 32 == rem, (t3.layout_fx()[0][2], rem)
+        return out
+
+    multi = "\n".join([PROBE_RULER] + [ln for ln, _ in PROBE_LINES])
+    cases = [
+        ("31_字送り調べA", "8 行。字送りが式より長い字があると、その行のうしろの字が 1/8px 右へ動く（左端の余り 31）", aligned(multi, 31)),
+        ("32_字送り調べB", "同じ 8 行。字送りが式より短い字があると 1/8px 左へ動く（左端の余り 0）", aligned(multi, 0)),
+        ("33_で2行", "31 の 1・2 行目だけ（8 行がうまく開けなかったときの控え）", aligned(PROBE_RULER + "\n" + PROBE_LINES[0][0], 31)),
+        ("34_半角のあと", "21_半角入り の「で」を「い」に替えたもの（字のせいか、半角のあとという場所のせいかを分ける）",
+         t.rebuild(**retext("ABCabc123いテストする"))),
+    ]
+    for w in (4, 7, 8, 9, 12):
+        cases.append((f"{31 + len(cases)}_縁{w}px", f"縁の太さだけ {w}px に（縁の形の表にまだ無い太さ）", t.rebuild(edge_width=w)))
+    cases.append((f"{31 + len(cases)}_縦の端数", "位置だけ 20/256px（約 0.08px）下へ。縦の位置の丸め方（切り捨てか四捨五入か）が分かる",
+                  t.rebuild(pos=(t.pos[0], t.pos[1] + 20 / 256.0))))
+    eb = run.load_table(cfg).get("1121", {})
+    try:
+        if eb.get("face"):
+            src_eb = gdiglyph.GdiGlyphSource(eb["face"], int(eb.get("y_shift", 183)), int(eb.get("weight", 0)))
+            cases.append((f"{31 + len(cases)}_EB", "フォントだけ ニューロダン EB（番号 1121）に（前回の 26_EB と同じもの。書き出しが無かったので）",
+                          t.rebuild(**retext(t.text, fnt=src_eb, font_id=1121, prefer=False))))
+    except Exception as ex:
+        print(f"  ※ ニューロダン EB が無いので EB は作りません（{ex}）")
+    lines = ["VWS 確認用の一式・第 3 回（元: %s 「%s」）" % (os.path.basename(src), t.text), "",
+             "これまでと同じやり方で、VWS（テスト環境）で 1 つずつ開いて PNG で書き出してください。",
+             "開けないもの・字が崩れるもの・並びがおかしいものがあれば、その番号を教えてください。", "",
+             "31・32 は 8 行あります（行ごとに別の字を調べます）。もし 8 行がうまく開けなければ、33 だけでも助かります。",
+             "31 の行: 1 行目 " + PROBE_RULER] + [f"         {i + 2} 行目 {ln} … {d}" for i, (ln, d) in enumerate(PROBE_LINES)] + [""]
+    for name, desc, out in cases:
+        with open(os.path.join(outdir, name + ".ts1"), "wb") as f:
+            f.write(out)
+        t2 = TS1(out)
+        ts1_to_png(t2, os.path.join(outdir, name + "_予想.png"))
+        lines += [f"{name}.ts1 … {desc}", _describe(t2)]
+        print(f"  {name}.ts1 / {name}_予想.png  … {desc}")
+    with open(os.path.join(outdir, "やり方.txt"), "w", encoding="utf-8-sig") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"  → {outdir}（やり方.txt を見てください）")
+
+
 def _find_png(folder, stem):
     """「○○.png」「[○○].png」のほか、後ろに書き足した名前（「[○○]_ニューロダンB.png」など）も探す"""
     for cand in (stem + ".png", f"[{stem}].png"):
@@ -263,6 +352,116 @@ def diagnose(t, png_path, org):
     return notes
 
 
+def _ref_k(t, png):
+    """VWS の PNG → 文字面の量 k（0〜128。分からない画素は −1）を全画面の配列で返す。
+    縁つきは「縁が不透明な所の色」から、縁なしはアルファから逆算する（重ね方の式の逆）"""
+    best = compare(t, png)
+    ox, oy = best[3]
+    ref = np.asarray(Image.open(png).convert("RGBA")).astype(int)
+    H, W = ref.shape[:2]
+    full = np.zeros((1080, 1920, 4), int)
+    full[oy:oy + H, ox:ox + W] = ref
+    K = np.full((1080, 1920), -1, int)
+    if t.edge_width():
+        F = np.array(t.face_color()[:3])
+        E = np.array(t.edge_color()[:3])
+        ch = int(np.argmax(np.abs(F - E)))
+        lut = {}
+        for k in range(129):
+            a = min(255, 2 * k)
+            c = int(E[ch]) if a == 0 else int(E[ch] + (((F[ch] - E[ch]) * (a + 1)) >> 8))
+            lut.setdefault(c, []).append(k)
+        op = full[..., 3] == 255
+        for c, ks in lut.items():
+            if len(ks) == 1:
+                K[op & (full[..., ch] == c)] = ks[0]
+    else:
+        a = full[..., 3]
+        even = (a % 2 == 0) & (a < 255)
+        K[even] = (a // 2)[even]
+        K[a == 255] = 128
+    return K
+
+
+def _kmap(g, g8x, g8y, sc):
+    """字 1 つを 8 倍格子の原点 (g8x, g8y) に置いたときの文字面の量 k（枠で切る前）→ (k, 左の列, 上の行)"""
+    SS = vwsrender.SS
+    polys = vwsrender.glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS, g8x % SS, g8y % SS)
+    xs = [p[0] for pl in polys for p in pl]
+    ys = [p[1] for pl in polys for p in pl]
+    px0, py0 = (g8x + min(xs)) // SS - 2, (g8y + min(ys)) // SS - 3
+    px1, py1 = (g8x + max(xs)) // SS + 3, (g8y + max(ys)) // SS + 3
+    w, h = px1 - px0, py1 - py0
+    m = vwsrender.fill_gdi([[(g8x + a - px0 * SS, g8y + b - py0 * SS) for a, b in pl] for pl in polys], w * SS, h * SS)
+    m = m.reshape(h, SS, w, SS).sum((1, 3)).astype(np.int32)
+    k = m.copy()
+    k[:-1] += m[1:]
+    return k, px0, py0
+
+
+def origins(folder):
+    """字ごとに、原点を 1/8px ずつ動かして VWS の PNG（から逆算した文字面の量）と 1 画素も違わない位置を探す。
+    枠の切り方（上端 2 行・左端 2 列）と、隣の字に重なる列は比べない。
+    出力は行ごとに「字 余り→ずれ」: 余り = 式で出した x（1/256px）を 32 で割った余り、ずれ = VWS の原点 − 式の原点（1/8px 単位。0 なら式どおり）。
+    字送りが式より 1/256px 長い字があると、その字のうしろで 余り 31 の字が +1 になる（短いと 余り 0 の字が −1）"""
+    import math
+    SS = vwsrender.SS
+    for fn in sorted(os.listdir(folder)):
+        if not fn.endswith(".ts1"):
+            continue
+        stem = fn[:-4]
+        png = _find_png(folder, stem)
+        if not png:
+            continue
+        with open(os.path.join(folder, fn), "rb") as f:
+            t = TS1(f.read())
+        K = _ref_k(t, png)
+        lay = t.layout_fx()
+        rows = {}
+        for idx, (c, g, x, y, sc) in enumerate(lay):
+            if not g.contours:
+                rows.setdefault(y, []).append(f"{g.char}(空)")
+                continue
+            sx = float(getattr(sc, "sx", sc))
+            neigh = []
+            for j in (idx - 1, idx + 1):
+                if 0 <= j < len(lay) and lay[j][1].contours and lay[j][3] == y:
+                    gg, xx, sxx = lay[j][1], lay[j][2] / 256.0, float(getattr(lay[j][4], "sx", lay[j][4]))
+                    neigh.append((xx + gg.bbox()[0] * sxx, xx + gg.bbox()[2] * sxx))
+            b8x, b8y = x * SS // 256, int(math.floor(y * SS + 0.5))
+            res = []
+            for dy in (0, -1, 1):
+                for dx in range(-3, 4):
+                    k, px0, py0 = _kmap(g, b8x + dx, b8y + dy, sc)
+                    h, w = k.shape
+                    sub = K[py0:py0 + h, px0:px0 + w]
+                    if sub.shape != k.shape:
+                        continue
+                    sel = (sub >= 0) & (k > 0)
+                    ys_, xs_ = np.nonzero(k > 0)
+                    sel[:ys_.min() + 2] = False
+                    sel[:, :xs_.min() + 2] = False
+                    for nl, nr in neigh:
+                        c0, c1 = int(math.floor(nl)) - 1 - px0, int(math.ceil(nr)) + 1 - px0
+                        sel[:, max(c0, 0):max(c1, 0)] = False
+                    res.append((int((k[sel] != sub[sel]).sum()), -int(sel.sum()), dx, dy))
+            good = [(dx, dy) for bad, nsel, dx, dy in res if bad == 0 and -nsel >= 30]
+            if len(good) == 1:
+                dx, dy = good[0]
+                mark = f"{dx:+d}" if dx else "0"
+                if dy:
+                    mark += f"(縦{dy:+d})"
+            elif good:
+                mark = "?" + "/".join(f"{dx:+d}" for dx, dy in good)
+            else:
+                bad, nsel, dx, dy = min(res) if res else (0, 0, 0, 0)
+                mark = f"×(最も近い {dx:+d} 縦{dy:+d} で {bad} 画素違う)"
+            rows.setdefault(y, []).append(f"{g.char} {x % 32}→{mark}")
+        print(f"{fn}:")
+        for y in sorted(rows):
+            print(f"    y={y:g}:  " + "   ".join(rows[y]))
+
+
 def check(folder):
     found = 0
     for fn in sorted(os.listdir(folder)):
@@ -295,13 +494,21 @@ def check(folder):
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ("make", "extra", "check"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("make", "extra", "probe", "origins", "check"):
         print(__doc__)
         return 1
     if sys.argv[1] == "extra":
         src = sys.argv[2]
         out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(src)), "VWS確認用_追加")
         make_extra(src, out)
+        return 0
+    if sys.argv[1] == "origins":
+        origins(sys.argv[2])
+        return 0
+    if sys.argv[1] == "probe":
+        src = sys.argv[2]
+        out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(src)), "VWS確認用_第3回")
+        make_probe(src, out)
         return 0
     if sys.argv[1] == "make":
         src = sys.argv[2]

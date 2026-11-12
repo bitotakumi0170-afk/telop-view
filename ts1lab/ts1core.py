@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 
@@ -113,6 +114,17 @@ class Glyph:
             if a_ + b_ + c_ > 0:
                 return a_ + b_ + c_
         return CELL
+
+    def advance_fx(self, size_px):
+        """字送り（1/256px の整数）。VWS は字形ヘッダの A（左の余白）・B（字の幅）・C（右の余白）を
+        別々に 1/256px へ切り捨ててから足す。全角（A + B + C = 2048）でも端数の出方で 0〜2/256px 短くなる
+        （VWS が保存した 1 行ものの「行の幅」と 1/256px まで一致。書き出し PNG でも 249 字中 248 字の位置が合う）"""
+        h = self.header_raw
+        a_, b_, c_ = struct.unpack_from("<iii", h, 44) if h and len(h) >= 56 else (0, 0, 0)
+        if a_ + b_ + c_ <= 0:
+            a_, b_, c_ = 0, CELL, 0
+        k = size_px * FIX / CELL
+        return int(math.floor(a_ * k)) + int(math.floor(b_ * k)) + int(math.floor(c_ * k))
 
     def build_header(self) -> bytes:
         l, t, r, btm = self.bbox()
@@ -576,16 +588,19 @@ class TS1:
             out.append(cur)
         return out
 
-    def layout(self, newline_code=0x0D):
-        """各文字の配置を返す: [(Char, Glyph, x原点, ベースラインy, scale)]
+    def layout_fx(self, newline_code=0x0D):
+        """VWS と同じ整数の計算で字を並べる → [(Char, Glyph, x 原点（1/256px の整数）, ベースライン y, scale)]
         scale は 2048 単位 → px の倍率（Scale: float。横と縦が違うときは .sx / .sy を見る）
 
-        確認したルール（見本 = VWS 出力画像と画素単位で照合 / 別サンプル = OFRI の描画範囲と照合）
-          - 文字送り = 字形の (A + B + C) / 2048 × 文字サイズ × 横倍率。全角は 2048、専用空白 U+E73E は 512
+        確認したルール（VWS の書き出し PNG と画素単位で照合。18 本・249 字のうち 248 字の位置がこの計算どおり）
+          - 字送り = Glyph.advance_fx（A・B・C を別々に 1/256px へ切り捨てて足す）。文字サイズ × 横倍率で決まる
           - ACMG（倍率 %）は字形も送りも縮める（左・ベースライン基準）。指定が無い文字は直前の値を引き継ぐ
           - ACSP（字間）は「その文字の直前」の間隔に効く（行頭の ACSP は無視）。指定が無い文字は直前の値を引き継ぐ
           - 改行は U+000D（空の字形を持つ）。行送り = 文字サイズ + ALSP（行間）
-          - 一番長い行を CSML の x から幅 CSTR.width の枠内で中央に置き、各行は左端をそろえる。CSML の y は最終行のベースライン
+          - 行の幅 = 字送りの合計 + 2 字目以降の字間
+          - 枠つき（CSML）: 一番長い行を CSML の x から幅 CSTR.width の枠の中央に置き（余りの半分は切り捨て）、
+            各行は左端をそろえる（行ごとの中央揃えではない）。CSML の y は最終行のベースライン
+          - 1 行もの（CSSL）: x がそのまま行の左端
         """
         size_w, size_h = self.char_size
         sp = self.spacings()
@@ -599,26 +614,42 @@ class TS1:
                 lines.append(cur); cur = []
                 continue
             g = glyphs[ch.glyph_index]
-            adv = g.advance_units() / CELL * size_w * m_[0] / 100
-            cur.append((ch, g, s_, m_, adv))
+            cur.append((ch, g, int(math.floor(s_ * FIX)), m_, g.advance_fx(size_w * m_[0] / 100)))
         lines.append(cur)
-        x0, y0 = self.pos
-        bw, _ = self.box
+        x0 = int(round(self.pos[0] * FIX))
+        y0 = self.pos[1]
+        bw = int(round(self.box[0] * FIX))
         pitch = size_h + self.line_spacing
-        widths = [sum(c[4] for c in line) + sum(c[2] for c in line[1:]) if line else 0.0 for line in lines]
-        # 複数行: 一番長い行に合わせて全体を枠の中央に置き、各行は左端をそろえる（VWS の書き出しで確認。行ごとの中央揃えではない）
-        block_left = x0 + (bw - max(widths)) / 2 if widths else x0
+        widths = [sum(c[4] for c in line) + sum(c[2] for c in line[1:]) if line else 0 for line in lines]
+        start = x0 if self.kind == "CSSL" else x0 + (bw - max(widths)) // 2
         out = []
         for li, line in enumerate(lines):
-            if not line:
-                continue
-            x = block_left
+            x = start
             y = y0 - (len(lines) - 1 - li) * pitch
-            for k, (ch, g, s_, m_, adv) in enumerate(line):
+            for k, (ch, g, s_fx, m_, adv) in enumerate(line):
                 if k:
-                    x += s_
+                    x += s_fx
                 out.append((ch, g, x, y, Scale(size_w / CELL * m_[0] / 100, size_h / CELL * m_[1] / 100)))
                 x += adv
+        return out
+
+    def layout(self, newline_code=0x0D):
+        """各文字の配置を返す: [(Char, Glyph, x原点 px, ベースラインy, scale)]。layout_fx の x を px にしたもの"""
+        return [(ch, g, x / FIX, y, sc) for ch, g, x, y, sc in self.layout_fx(newline_code)]
+
+    def line_widths_fx(self, newline_code=0x0D):
+        """行ごとの幅（1/256px の整数）= 字送りの合計 + 2 字目以降の字間"""
+        out, cur, n = [], 0, 0
+        size_w = self.char_size[0]
+        for ch, s_, m_ in zip(self.chars, self.spacings(), self.magnifications()):
+            if ch.code == 0:
+                continue
+            if ch.code in (0x0A, newline_code):
+                out.append(cur); cur, n = 0, 0
+                continue
+            cur += self.glyphs[ch.glyph_index].advance_fx(size_w * m_[0] / 100) + (int(math.floor(s_ * FIX)) if n else 0)
+            n += 1
+        out.append(cur)
         return out
 
     # -- 情報 ---------------------------------------------------------------
@@ -648,15 +679,10 @@ class TS1:
 
     # -- 再構築 -------------------------------------------------------------
     def line_width(self):
-        """1 行もの（CSSL）の CSTR に入る行の幅 = 字送りと字間の合計 − 文字数（終端も数える）/ 256
-        （新サンプル: 150 × 3 + 1 + 4 = 455 → 454.984375 = 455 − 4/256）"""
-        lay = self.layout()
-        if not lay:
-            return 0.0
-        x0 = lay[0][2]
-        ch, g, x, _y, sc = lay[-1]
-        adv = g.advance_units() * getattr(sc, "sx", sc)
-        return (x + adv - x0) - len(self.chars) / 256.0
+        """1 行もの（CSSL）の CSTR に入る行の幅 (px) = 字送りの合計 + 2 字目以降の字間（1/256px の整数で足したもの）
+        （VWS が保存した 5 本で一致: 150 × 3 + 1 + 4 = 455 から、字送りの切り捨てで 4/256 減って 454.984375）"""
+        w = self.line_widths_fx()
+        return max(w) / FIX if w else 0.0
 
     def rebuild(self, chars=None, glyphs=None, pos=None, face_color=None, edge_color=None,
                 clear_history=False, keep_glyph_header=True, edge_width=None, color_order=COLOR_ORDER, _line_w=None):

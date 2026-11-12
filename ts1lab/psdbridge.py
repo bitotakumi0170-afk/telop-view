@@ -472,7 +472,7 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
         w = 0.0
         for j, ch in enumerate(line):
             g = by_code.get(ord(ch))
-            w += (g.advance_units() if g else CELL) / CELL * size * hs[k + j] / 100 + (spacing[k + j] if j else 0.0)
+            w += (g.advance_fx(size * hs[k + j] / 100) / 256 if g else size * hs[k + j] / 100) + (spacing[k + j] if j else 0.0)
         widths.append(w)
         k += len(line) + 1
     w0 = widths[-1]

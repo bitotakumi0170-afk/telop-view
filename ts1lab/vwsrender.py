@@ -1,20 +1,20 @@
 """VWS と同じ手順でテロップを描く（VWS の書き出し PNG の画素値から突き止めた描き方。2026-11-12）
 
-VWS の描き方（見本と、確認用の縁 3px・縁 10px・サイズ 60・位置変更・色変更を VWS で開いた書き出しで確認。ニューロダン B）
-  1. 字の原点を 8 倍の整数格子に置く。横は 1 字進むごとに 0.01px ずつ詰めてから 1/8px に四捨五入
-     （サイズ 100 でも 60 でも 1 字あたり 0.01px。7〜8 字目で 1/8px の段差が出る。行の先頭字が基準）
-  2. 輪郭の点（2048 単位）を 8 倍の格子へ: (int)(座標 × サイズ × 8 / 2048)。C の整数変換 = 0 方向へ切り捨て
-     （x は左へ、ベースラインより上の y は下へ寄る）
+VWS の描き方（見本と、確認用の第 1 回・第 2 回・追加分を VWS で開いた書き出しで確認。ニューロダン B / EB）
+  1. 字を 1/256px の整数で並べ（layout_fx）、原点を 8 倍の格子へ切り捨てる。字送りは A・B・C を別々に 1/256px へ
+     切り捨てて足すので、全角でも少しずつ短くなり、7〜8 字目あたりで 1/8px の段差が出る
+  2. 輪郭の点（2048 単位）を 8 倍の格子へ: (int)(原点の画素内の位置 + 座標 × サイズ × 8 / 2048)。C の整数変換 = 0 方向へ切り捨て
+     （x は左へ、ベースラインより上の y は下へ寄る。原点が画素の境目なら (int)(座標 × 倍率) と同じ）
   3. 2 次ベジェ曲線は、整数のまま半分ずつに割る（中点 (a + b) / 2 も 0 方向へ切り捨て）。
      弦の中点 p0 + (p1 − p0) / 2 と制御点の差 h が hx² + hy² ≤ 17 になったら割るのをやめて直線でつなぐ
   4. 多角形を GDI と同じ規則で塗る（8 倍サイズ・整数座標の点で内外判定・左と上を含み右と下を含まない）
   5. 1 画素 = 8×8 の点を数える → 1 ラインぶんの文字面 m (0..64)
-  6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとに上端を整数行に丸めて、その上にはみ出す行は切る。
-     左も、字の左端（実数）が画素の右 1/8 に入っていたら、その画素列は描かない
+  6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとの絵には枠があり、枠の外は描かない。
+     枠は輪郭データの点の範囲を実数のまま置いて決まる（上: 上端 − 0.5 を切り上げた行の 1 行上から。左: 左端を切り捨てた列から）
   7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量の形は EDGE_ROWS の実測値。縁 1・2・3・5・6・10・14・20px）
   8. 縁の層（縁色・Ae）の上に文字面の層（文字色・Af）を重ねる。整数の式は compose の説明
-見本と確認用 5 本の 6 枚すべてで、VWS の PNG と 1 画素も違わない（100%）。
-影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。縁なし・縁 3/6/10px 以外・文字が縁より暗い色は VWS では未確認。
+見本と確認用 20 本の 21 枚中 19 枚で、VWS の PNG と 1 画素も違わない（残りは縁 1px の色 1/255 と、半角入りの 1 字）。
+影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。表に無い縁幅（4・7〜9・11〜13・15px 以上）は近い形で描く。
 """
 from __future__ import annotations
 
@@ -23,10 +23,12 @@ import math
 import numpy as np
 from PIL import Image
 
-from ts1core import COLOR_ORDER, PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE
+import struct
+
+from ts1core import COLOR_ORDER, PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE, Scale
 
 SS = 8                 # 1px を 8×8 に分ける
-ADVANCE_LOSS = 0.01     # 1 字進むごとに詰まる量 px（行の先頭字が基準）。サイズ 100 と 60 で同じ値（倍率ではない）
+FX = 256               # VWS は横の位置を 1/256px の整数（24.8 固定小数点）で持つ
 # 曲線を割るのをやめる条件（8 倍格子の整数）:
 #   h = p0 + (p1 − p0) / 2 − c   … 弦の中点と制御点の差。割り算は C の整数割り算（0 方向へ切り捨て）
 #   hx² + hy² ≤ FLAT_SQ なら割らずに直線でつなぐ
@@ -55,10 +57,15 @@ def _subdivide(p0, c, p1, out, depth=0):
     _subdivide(r, q1, p1, out, depth + 1)
 
 
-def glyph_polys8(glyph, sx8, sy8=None):
-    """字形の輪郭 → 8 倍格子の整数の多角形（字の原点からの相対）。sx8, sy8 = 2048 単位 → 8 倍格子の倍率（横・縦）"""
+def glyph_polys8(glyph, sx8, sy8=None, fx=0, fy=0):
+    """字形の輪郭 → 8 倍格子の整数の多角形（字の原点からの相対）。sx8, sy8 = 2048 単位 → 8 倍格子の倍率（横・縦）
+    fx, fy = 字の原点（8 倍格子）が画素の中のどこにあるか（0〜7）。VWS は「画素の中の位置 + 座標 × 倍率」を足してから
+    切り捨てる（0 方向）ので、原点が画素の境目でないとき（y = 607.5 など）は、原点のすぐ上・すぐ左の点が 1/8px ずれる
+    （サイズ 150・ベースライン .5 の 1 行もので確認: 「打」「験」の下端がこれで合う）"""
     sy8 = sx8 if sy8 is None else sy8
-    P = lambda p: (int(p[0] * sx8), int(p[1] * sy8))
+    # 点も、曲線を割るときの中点も「原点のある画素の左上」を基準にした座標で整数にする（中点の切り捨ては符号で向きが変わるため）。
+    # 最後に字の原点からの相対に戻す
+    P = lambda p: (int(fx + p[0] * sx8), int(fy + p[1] * sy8))
     polys = []
     for c in glyph.contours:
         cur = c.start
@@ -84,7 +91,7 @@ def glyph_polys8(glyph, sx8, sy8=None):
                         y = (1 - t) ** 3 * p0[1] + 3 * (1 - t) ** 2 * t * c1[1] + 3 * (1 - t) * t * t * c2[1] + t ** 3 * p1[1]
                         pl.append(P((x, y)))
                     cur = p1
-        polys.append(pl)
+        polys.append([(a - fx, b - fy) for a, b in pl])
     return polys
 
 
@@ -161,20 +168,26 @@ def _dilate(a, offs):
     return out
 
 
+def advance_fx(g, size_px):
+    """1 字の字送り（1/256px の整数）。中身は ts1core.Glyph.advance_fx"""
+    return g.advance_fx(size_px)
+
+
+def layout_fx(ts1, newline_code=0x0D):
+    """VWS と同じ整数の計算で字を並べる。中身は ts1core.TS1.layout_fx"""
+    return ts1.layout_fx(newline_code)
+
+
 def face_counts(ts1, canvas=(1920, 1080)):
     """文字面の量 k_f (0..128) をキャンバス全体の int 配列で返す"""
     W, H = canvas
     kf = np.zeros((H, W), np.int32)
-    nth = {}
-    for ch, g, x, y, sc in ts1.layout():
-        row = round(y, 3)
-        i = nth.get(row, 0)                                     # 行の中で何字目か（0 始まり。空白も数える）
-        nth[row] = i + 1
+    for ch, g, x_fx, y, sc in layout_fx(ts1):
         if not g.contours:
             continue
-        g8x = int(math.floor((x - ADVANCE_LOSS * i) * SS + 0.5))
+        g8x = x_fx * SS // FX                                   # 1/256px の整数 → 8 倍格子へ切り捨て
         g8y = int(math.floor(y * SS + 0.5))
-        polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS)
+        polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS, g8x % SS, g8y % SS)
         xs = [p[0] for pl in polys for p in pl]
         ys = [p[1] for pl in polys for p in pl]
         # 字ごとの窓（画素単位）
@@ -187,17 +200,18 @@ def face_counts(ts1, canvas=(1920, 1080)):
         m = mask.reshape(h, SS, w, SS).sum((1, 3)).astype(np.int32)       # 1 ラインぶん (0..64)
         k = m.copy()
         k[:-1] += m[1:]                                                    # 上下 2 ライン
-        # 上端: 字の上端（8 倍格子）を整数行に丸め、その 1 行上から描く。それより上にはみ出す行は切る
-        # 上端・左端は、実際に描いた多角形ではなく輪郭データの点（制御点も含む）の範囲から決まる
-        # （曲線レコードを壊した確認用ファイルの VWS 書き出しで確認: 読まれない点も範囲に入る）
-        top8 = g8y + int(-g.bbox()[1] * getattr(sc, "sy", sc) * SS)
-        first_row = (top8 + SS // 2 - 1) // SS - 1   # = ceil(上端px - 0.5) - 1。端数 .5 ちょうどは切らない（別サンプルの OFRI で確認）
+        # 字ごとの絵には枠があり、枠の外は描かれない。枠は輪郭データの点（制御点も含む）の範囲を実数のまま置いて決まる
+        # （描いた多角形からではない。曲線レコードを壊した確認用ファイルで、読まれない点も範囲に入ることを確認）
+        #   上: 上端の px − 0.5 を切り上げた行の 1 行上から（2 ライン足しのぶん 1 行広い。端数 .5 ちょうどは切らない）
+        #   左: 左端の px を切り捨てた列から。輪郭の点は 0 方向へ切り捨てるので、左端がちょうど画素の境目を少し越えた字は
+        #       1/8px だけ手前の画素にはみ出すが、そこは枠の外で描かれない（245 字で確認: はみ出した 16 字は全部描かれず、ほかは全部描かれる）
+        sx_, sy_ = getattr(sc, "sx", sc), getattr(sc, "sy", sc)
+        top_px = y - g.bbox()[1] * sy_
+        first_row = int(math.ceil(top_px - 0.5)) - 1
         if first_row - py0 > 0:
             k[:first_row - py0] = 0
-        # 左端: 字の左端を実数（丸める前の原点 + 輪郭の左端 × 倍率）で出し、画素の右 1/8 に入っていたらその画素列は描かない。
-        # 見本の「な」、サイズ 60 の「て」「で」の先端 1 点がこれで消える（左端が 7.17〜7.58/8 の 3 例は描かず、6.64/8 の 1 例は描く）
-        left8 = (x - ADVANCE_LOSS * i) * SS + g.bbox()[0] * getattr(sc, "sx", sc) * SS
-        first_col = int(math.floor((left8 + 1) / SS))
+        left_px = x_fx / FX + g.bbox()[0] * sx_
+        first_col = int(math.floor(left_px))
         if first_col - px0 > 0:
             k[:, :first_col - px0] = 0
         # キャンバスへ（字どうしが重なる所は大きい方）
@@ -213,16 +227,12 @@ def real_bbox(ts1):
     """字形の範囲（輪郭データの点。制御点も含む）を実数のまま画面に置いたときの外接範囲 (L, T, R, B)。無ければ None"""
     L = T = float("inf")
     R = B = float("-inf")
-    nth = {}
-    for ch, g, x, y, sc in ts1.layout():
-        row = round(y, 3)
-        i = nth.get(row, 0)
-        nth[row] = i + 1
+    for ch, g, x_fx, y, sc in layout_fx(ts1):
         if not g.contours:
             continue
         sx, sy = getattr(sc, "sx", sc), getattr(sc, "sy", sc)
         l, top, r, btm = g.bbox()          # y は上向き正
-        xx = x - ADVANCE_LOSS * i
+        xx = x_fx / FX
         L, R = min(L, xx + l * sx), max(R, xx + r * sx)
         T, B = min(T, y - top * sy), max(B, y - btm * sy)
     return None if L == float("inf") else (L, T, R, B)
