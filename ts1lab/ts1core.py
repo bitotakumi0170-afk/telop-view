@@ -726,14 +726,18 @@ class FontGlyphSource:
 
 
 def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
-               spacing=None, size=None, font_id=None, newline_code=0x0D):
+               spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False):
     """テンプレートの書式で text を組み直し、(chars, glyphs) を返す。
 
     - グリフ: font 指定時はフォントから生成、未指定ならテンプレートのキャッシュから流用
+      prefer_template=True なら、テンプレートにある文字は VWS が作った字形をそのまま使い、無い文字だけフォントから作る
+      （フォント番号が同じときだけ。VWS の字形と完全に同じになる）
     - spacing: 文字ごとの字間 px のリスト（None ならテンプレート先頭文字の値）
     """
     fid = font_id if font_id is not None else (template.font_id or 0x45F)
-    tmpl_glyphs = {g.code: g for g in template.glyphs}
+    tmpl_glyphs = {g.code: g for g in template.glyphs if g.font_id == fid}
+    if font is not None and not prefer_template:
+        tmpl_glyphs = {}
     codes = [newline_code if c == "\n" else ord(c) for c in text] + [0]
 
     # グリフ表: テンプレート同様、末尾の文字から順に登録（先頭は空グリフ）
@@ -744,7 +748,7 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
     usage = {c: codes.count(c) for c in order}
     glyphs = []
     for c in order:
-        if font is not None and c != 0:
+        if font is not None and c != 0 and c not in tmpl_glyphs:
             g = font.glyph(c, fid, usage[c])
         elif c in tmpl_glyphs:
             src = tmpl_glyphs[c]

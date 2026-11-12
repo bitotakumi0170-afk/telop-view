@@ -11,6 +11,7 @@ BATS = {
     "1_最初に1回だけ_セットアップ.bat": ("setup", None),
     "2_TS1をPhotoshop用に変換.bat": ("to-ps", ".ts1 をこの bat にドラッグ＆ドロップしてください"),
     "3_PSDをTS1に変換.bat": ("to-ts1", "Photoshop で保存した .psd をこの bat にドラッグ＆ドロップしてください"),
+    "4_TS1の文字を打ち替える.bat": ("text", ".ts1 をこの bat にドラッグ＆ドロップしてください（新しい文言を聞かれます）"),
     "フォントを特定する.bat": ("identify", ".ts1 をこの bat にドラッグ＆ドロップしてください（PC のフォントと字形を照合します）"),
     "中身を見る.bat": ("info", ".ts1 をこの bat にドラッグ＆ドロップしてください"),
 }
@@ -25,7 +26,9 @@ def main():
                       r'python -m pip install -r "%~dp0ts1lab\requirements.txt"',
                       "if errorlevel 1 (echo. & echo ※ 失敗しました。Python 3 が入っているか確認してください) else (echo. & echo セットアップ完了)"]
         else:
-            lines += [f'if "%~1"=="" (echo {hint} & pause & exit /b 1)', f"{RUN} {cmd} %*"]
+            # text は 1 ファイルだけ（文言は run.py が入力を求める）
+            lines += [f'if "%~1"=="" (echo {hint} & pause & exit /b 1)',
+                      f'{RUN} {cmd} "%~1"' if cmd == "text" else f"{RUN} {cmd} %*"]
         lines += ["echo.", "pause"]
         with open(os.path.join(out, name), "w", encoding="utf-8", newline="\r\n") as f:
             f.write("\n".join(lines) + "\n")

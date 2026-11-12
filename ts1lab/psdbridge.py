@@ -106,6 +106,7 @@ ti.size = new UnitValue(SPEC.ps_size, "px");
 ti.justification = Justification.CENTER;
 // VWS は全角を常に文字サイズ送りで並べる → Photoshop の既定「メトリクス」カーニングを切る（かなが詰まるため）
 ti.autoKerning = AutoKernType.MANUAL;
+if (SPEC.antialias) ti.antiAliasMethod = AntiAlias[SPEC.antialias];
 var col = new SolidColor(); col.rgb.red = SPEC.fill[0]; col.rgb.green = SPEC.fill[1]; col.rgb.blue = SPEC.fill[2];
 ti.color = col;
 ti.useAutoLeading = false;
@@ -184,6 +185,30 @@ def baseline_shift(size, font_fit):
     return (font_fit or {}).get("oy", 0.0) * size / CELL
 
 
+# VWS の描画は数式上の位置から (-0.125, -0.375)px ずれる（ラスタライザの癖。VWS 出力 PNG との照合で確認、
+# Photoshop との直接照合でも縦 -0.42px を実測）。Photoshop のアンカーにこの分を足し、PSD → TS1 では引く
+VWS_RASTER_OFFSET = (-0.125, -0.375)
+# cell_ratio がこれより 1 に近いフォントは、Photoshop のサイズ = VWS のサイズにして全角送りを完全に一致させる
+# （トラッキングは整数なので 0.018/1000em のような送り補正は表せず、16 文字で 0.3px ずれていた）
+UNIT_RATIO_TOL = 0.005
+# VWS の PNG と Photoshop の出力を直接照合して決めた値（2026-11-12、見本 1 件・縁 6px。premultiplied 平均差）
+#   境界線 6px:  STRONG 3.45% / SMOOTH 3.61% / CRISP 5.46% / SHARP 6.11%（直す前は既定 CRISP で 6.9%）
+#   作った直後なら SMOOTH + 境界線 6.25px が 3.30% で最良だが、Photoshop は境界線の太さを保存時に整数へ丸めるので
+#   PSD を開き直すと 6px に戻る（レイヤー効果の比率 Scl は描画に効かない）。→ 保存後も保てる STRONG + 整数を採用
+PS_ANTIALIAS = "STRONG"
+EDGE_PS_EXTRA = 0  # Photoshop の境界線 = VWS の縁 + この値（整数でないと保存で消える）
+
+
+def ps_size_of(size, cell_ratio):
+    """VWS の文字サイズ（セル高）→ Photoshop の文字サイズ（em）"""
+    return size if abs(cell_ratio - 1) < UNIT_RATIO_TOL else size / cell_ratio
+
+
+def vws_size_of(ps_size, cell_ratio):
+    """ps_size_of の逆"""
+    return ps_size if abs(cell_ratio - 1) < UNIT_RATIO_TOL else ps_size * cell_ratio
+
+
 def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font=None,
              font_hints=(), cell_ratio=1.0, ref_png="", font_fit=None):
     """Photoshop 再現用のパラメータ
@@ -195,9 +220,10 @@ def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font
     """
     face, edgec = ts1.face_color(color_order), ts1.edge_color(color_order)
     size = ts1.char_size[0]
-    ps_size = size / cell_ratio
+    ps_size = ps_size_of(size, cell_ratio)
     extra = (size - ps_size) / ps_size * 1000  # 送り補正（1/1000 em）
     sp = ts1.spacings()
+    edge_px = (ts1.edge_width() if edge is None else edge) or 0
     chars = [ch for ch in ts1.chars if ch.code]
     text = "".join("\n" if ch.code in (0x0A, 0x0D) else ch.char for ch in chars)
     return {
@@ -210,11 +236,14 @@ def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font
         # VWS の ACSP は「その文字の前」→ Photoshop では 1 つ前の文字のトラッキング
         "tracking": [int(round(sp[i + 1] / ps_size * 1000 + extra)) if i + 1 < len(chars) else 0
                      for i in range(len(chars))],
-        "anchor": [ts1.pos[0] + ts1.box[0] / 2, round(ts1.pos[1] + baseline_shift(size, font_fit), 3)],
+        "anchor": [ts1.pos[0] + ts1.box[0] / 2 + VWS_RASTER_OFFSET[0],
+                   round(ts1.pos[1] + baseline_shift(size, font_fit) + VWS_RASTER_OFFSET[1], 3)],
         "fill": list(face[:3]),
         "edge_color": list(edgec[:3]),
         "edge_opacity": round(edgec[3] / 255 * 100, 1),
-        "edge": (ts1.edge_width() if edge is None else edge) or 0,
+        # Photoshop の境界線は VWS の縁より細く描かれるので EDGE_PS_EXTRA だけ太くする
+        "edge": edge_px + EDGE_PS_EXTRA if edge_px else 0,
+        "antialias": PS_ANTIALIAS,
         "font_id": ts1.font_id,
         "ps_font": ps_font or "",
         "font_hints": [list(h) for h in font_hints],
@@ -369,13 +398,14 @@ def read_psd_text(path, layer_name=None):
 
 
 def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name=None, font_id=None,
-               color_order=COLOR_ORDER, clear_history=False, font_fit=None):
+               color_order=COLOR_ORDER, clear_history=False, font_fit=None, prefer_template=False):
+    """prefer_template=True: テンプレートと同じフォント番号なら、テンプレートにある文字は VWS の字形をそのまま使う"""
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
     font = FontGlyphSource(font_path, font_index, fit=font_fit) if font_path else None
     ratio = font.cell_ratio if font else 1.0
     ps_size = info["size"]
-    size = round(ps_size * ratio, 3)  # Photoshop の em → VWS のセル高
+    size = round(vws_size_of(ps_size, ratio), 3)  # Photoshop の em → VWS のセル高（ts1_spec の逆）
     n = len(text)
     tr = (info["tracking"] + [0] * n)[:n]
     # Photoshop のトラッキングは「その文字の後ろ」、VWS の ACSP は「その文字の前」に効く
@@ -386,7 +416,7 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     after = [snap(t / 1000 * ps_size - (size - ps_size)) for t in tr]
     spacing = [0.0] + [0.0 if text[i - 1] == "\n" else after[i - 1] for i in range(1, n)] + [0.0]
     chars, glyphs = build_text(template, text, font=font, spacing=spacing,
-                               size=(size, size), font_id=font_id)
+                               size=(size, size), font_id=font_id, prefer_template=prefer_template)
     # 位置: Photoshop のアンカー（ベースライン）→ VWS の枠（中央揃え）
     lines = text.split("\n")
     widths, k = [], 0
@@ -396,13 +426,15 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
         k += len(line) + 1
     w0 = widths[-1]
     ax, ay = info["anchor"]
-    left = {"left": ax, "center": ax - w0 / 2, "right": ax - w0}[info["justification"]]
+    ax, ay = ax - VWS_RASTER_OFFSET[0], ay - VWS_RASTER_OFFSET[1]  # ts1_spec で足した VWS の描画の癖を戻す
+    left ={"left": ax, "center": ax - w0 / 2, "right": ax - w0}[info["justification"]]
     box_w = template.box[0]
     # Photoshop のアンカーはフォント本来のベースライン → VWS のベースラインへ戻す（ts1_spec の逆）
     ay -= baseline_shift(size, font_fit)
     pos = (left + w0 / 2 - box_w / 2, ay + (len(lines) - 1) * (size + template.line_spacing))
 
-    edge = info["edge"] if info["edge"] else None   # 境界線が無ければテンプレートの縁を維持
+    # 境界線が無ければテンプレートの縁を維持。ts1_spec で足した EDGE_PS_EXTRA を引いて VWS の整数の縁幅に戻す
+    edge = max(1, int(round(info["edge"] - EDGE_PS_EXTRA))) if info["edge"] else None
     out = template.rebuild(chars=chars, glyphs=glyphs, pos=pos,
                            face_color=info["fill"], edge_color=info["edge_color"],
                            clear_history=clear_history, edge_width=edge, color_order=color_order)

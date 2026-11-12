@@ -6,6 +6,7 @@
   python run.py info   素材.ts1 ...   → 文字・色・縁・サイズなどを表示、全項目を 素材_構造.txt に保存
   python run.py diff   A.ts1 B.ts1    → 2 つの違いを項目単位で表示（A_差分.txt に保存）
   python run.py identify 素材.ts1     → 字形を PC の全フォントと照合してフォントを特定、フォント表.json に登録
+  python run.py text   素材.ts1 [新しい文言] → 書式はそのまま文言だけ打ち替え（素材_打ち替え.ts1 / _確認.png）。文言を省くと入力を求める
 """
 import json
 import logging
@@ -232,7 +233,8 @@ def to_ts1(cfg, path):
     if not fp:
         print("  ※ フォントファイルが見つからないため、テンプレート内の字形だけで組みます")
     out, info = psd_to_ts1(path, tmpl, font_path=fp, font_index=fi, font_fit=fit,
-                           font_id=font_id, clear_history=cfg.get("clear_history", False))
+                           font_id=font_id, clear_history=cfg.get("clear_history", False),
+                           prefer_template=bool(hit))
     # 「○○.ts1」にすると to-ps の元にした .ts1 を上書きしてしまうので、必ず別名にする
     with open(base + "_VWS用.ts1", "wb") as f:
         f.write(out)
@@ -242,6 +244,46 @@ def to_ts1(cfg, path):
     print(f"  文字色 {i['face_color']} / 縁色 {i['edge_color']} / 縁 {i['edge_width']}px / サイズ {i['char_size'][0]:g}"
           f" / VWS フォント番号 {t.font_id}")
     print(f"  → {os.path.basename(base)}_VWS用.ts1 / {os.path.basename(base)}_確認.png")
+
+
+def retype(cfg, path, text=None):
+    """.ts1 の書式（位置・色・縁・サイズ・フォント番号）のまま文言だけ打ち替える。
+    元の .ts1 にある文字は VWS の字形をそのまま使い、無い文字だけ PC のフォントから作る"""
+    from ts1core import build_text
+    from psdbridge import ts1_to_png
+    with open(path, "rb") as f:
+        t = TS1(f.read())
+    print(f"  今の文言: {t.text}")
+    if text is None:
+        text = input("  新しい文言（改行は \\n と入力）: ").strip()
+    text = text.replace("\\n", "\n")
+    if not text:
+        print("  文言が空なので中止しました")
+        return
+    e = font_for_id(cfg, t.font_id, t)
+    font = None
+    have = {g.code for g in t.glyphs}
+    need = sorted({c for c in text if c != "\n" and ord(c) not in have})
+    if e and e.get("file"):
+        font = FontGlyphSource(e["file"], int(e.get("index", 0)), fit=_fit_of(e))
+        print(f"  フォント: {e.get('name')}（VWS 番号 {t.font_id}）")
+        if need:
+            print(f"  元の .ts1 に無い {len(need)} 文字はフォントから作ります: {''.join(need)}")
+    elif need:
+        raise RuntimeError(f"元の .ts1 に無い文字があり、フォント番号 {t.font_id} のフォントが PC で見つかりません: {''.join(need)}"
+                           "（「フォントを特定する」に .ts1 をドロップして登録してください）")
+    chars, glyphs = build_text(t, text, font=font, spacing=[0.0] * (len(text) + 1), prefer_template=True)
+    out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
+    base = os.path.splitext(path)[0] + "_打ち替え"
+    with open(base + ".ts1", "wb") as f:
+        f.write(out)
+    t2 = TS1(out)
+    ts1_to_png(t2, base + "_確認.png")
+    width = max(len(line) for line in text.split("\n")) * t2.char_size[0]
+    if width > t2.box[0]:
+        print(f"  ※ 文字の幅 {width:g}px が枠の幅 {t2.box[0]:g}px を超えています（VWS で左右がはみ出す可能性があります）")
+    print(f"  新しい文言: {t2.text}")
+    print(f"  → {os.path.basename(base)}.ts1 / {os.path.basename(base)}_確認.png")
 
 
 def info(cfg, path):
@@ -291,6 +333,14 @@ def main():
             print(".ts1 を 2 つ指定してください")
             return 1
         diff_pair(cfg, files[0], files[1])
+        return 0
+    if cmd == "text":
+        try:
+            retype(cfg, files[0], files[1] if len(files) > 1 else None)
+        except Exception as e:
+            print("  エラー:", e)
+            traceback.print_exc()
+            return 1
         return 0
     fn = {"to-ps": to_ps, "to-ts1": to_ts1, "info": info, "identify": identify}[cmd]
     ng = 0
