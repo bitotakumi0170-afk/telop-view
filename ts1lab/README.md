@@ -1,4 +1,4 @@
-# ts1lab — VWS テロップ (.ts1) ⇄ Photoshop 互換実験
+# VWSフォトショブリッジツール（ts1lab）— VWS テロップ (.ts1) ⇄ Photoshop
 
 VWS のテロップファイル (.ts1) を解析して Photoshop で再現し、逆に Photoshop のテキストレイヤから
 .ts1 を作る実験用ツールです。フォーマットの解析結果は [FORMAT.md](FORMAT.md)。

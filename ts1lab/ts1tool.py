@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ts1tool — VWS テロップ (.ts1) ⇄ Photoshop 実験ツール
+"""VWSフォトショブリッジツール (ts1tool) — VWS テロップ (.ts1) ⇄ Photoshop
 
   python ts1tool.py info     in.ts1                     # 中身を表示（--history で編集履歴も）
   python ts1tool.py render   in.ts1 -o preview.png      # プレビュー画像（--svg でベクターも）

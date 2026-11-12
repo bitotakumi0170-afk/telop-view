@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ドラッグ＆ドロップ用の入口（設定.json を読んで変換する）
+"""VWSフォトショブリッジツール — ドラッグ＆ドロップ用の入口（設定.json を読んで変換する）
 
   python run.py to-ps  素材.ts1 ...   → 素材_再現.png / 素材_画像レイヤ.psd / 素材_Photoshop用.jsx
   python run.py to-ts1 テロップ.psd ... → テロップ.ts1 / テロップ_確認.png
