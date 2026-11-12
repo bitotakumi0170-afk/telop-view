@@ -428,7 +428,7 @@ def origins(folder):
                 if 0 <= j < len(lay) and lay[j][1].contours and lay[j][3] == y:
                     gg, xx, sxx = lay[j][1], lay[j][2] / 256.0, float(getattr(lay[j][4], "sx", lay[j][4]))
                     neigh.append((xx + gg.bbox()[0] * sxx, xx + gg.bbox()[2] * sxx))
-            b8x, b8y = x * SS // 256, int(math.floor(y * SS + 0.5))
+            b8x, b8y = x * SS // 256, int(math.floor(y * SS))
             res = []
             for dy in (0, -1, 1):
                 for dx in range(-3, 4):

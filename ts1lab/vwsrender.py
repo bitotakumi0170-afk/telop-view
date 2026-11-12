@@ -10,11 +10,12 @@ VWS の描き方（見本と、確認用の第 1 回・第 2 回・追加分を 
   4. 多角形を GDI と同じ規則で塗る（8 倍サイズ・整数座標の点で内外判定・左と上を含み右と下を含まない）
   5. 1 画素 = 8×8 の点を数える → 1 ラインぶんの文字面 m (0..64)
   6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとの絵には枠があり、枠の外は描かない。
-     枠は輪郭データの点の範囲を実数のまま置いて決まる（上: 上端 − 0.5 を切り上げた行の 1 行上から。左: 左端を切り捨てた列から）
+     枠は輪郭データの点の範囲を実数のまま置いて決まる（上: floor(上端 − 0.5) の行から。左: 左端を切り捨てた列から）
   7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量の形は EDGE_ROWS の実測値。縁 1・2・3・5・6・10・14・20px）
   8. 縁の層（縁色・Ae）の上に文字面の層（文字色・Af）を重ねる。整数の式は compose の説明
-見本と確認用 20 本の 21 枚中 19 枚で、VWS の PNG と 1 画素も違わない（残りは縁 1px の色 1/255 と、半角入りの 1 字）。
-影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。表に無い縁幅（4・7〜9・11〜13・15px 以上）は近い形で描く。
+見本と確認用 31 本の 32 枚中 28 枚で、VWS の PNG と 1 画素も違わない（残りは縁 1px の色 1/255 と、
+原点がちょうど 1/8px の境目に乗った字が 1/8px 左に出る 3 枚）。
+影（装飾の種別 1）は未対応。表に無い縁幅は円 (縁 + 0.62)² で描く（4・7・8・9・12px は VWS と一致を確認）。
 """
 from __future__ import annotations
 
@@ -186,7 +187,7 @@ def face_counts(ts1, canvas=(1920, 1080)):
         if not g.contours:
             continue
         g8x = x_fx * SS // FX                                   # 1/256px の整数 → 8 倍格子へ切り捨て
-        g8y = int(math.floor(y * SS + 0.5))
+        g8y = int(math.floor(y * SS))                           # 縦も切り捨て（横と同じ。40_縦の端数で確認）
         polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS, g8x % SS, g8y % SS)
         xs = [p[0] for pl in polys for p in pl]
         ys = [p[1] for pl in polys for p in pl]
@@ -202,12 +203,13 @@ def face_counts(ts1, canvas=(1920, 1080)):
         k[:-1] += m[1:]                                                    # 上下 2 ライン
         # 字ごとの絵には枠があり、枠の外は描かれない。枠は輪郭データの点（制御点も含む）の範囲を実数のまま置いて決まる
         # （描いた多角形からではない。曲線レコードを壊した確認用ファイルで、読まれない点も範囲に入ることを確認）
-        #   上: 上端の px − 0.5 を切り上げた行の 1 行上から（2 ライン足しのぶん 1 行広い。端数 .5 ちょうどは切らない）
+        #   上: floor(上端の px − 0.5) の行から（2 ライン足しのぶん 1 行広い。上端 − 0.5 がちょうど整数ならその行から。
+        #       41_EB の「の」= 上端 954.5px で確認）
         #   左: 左端の px を切り捨てた列から。輪郭の点は 0 方向へ切り捨てるので、左端がちょうど画素の境目を少し越えた字は
         #       1/8px だけ手前の画素にはみ出すが、そこは枠の外で描かれない（245 字で確認: はみ出した 16 字は全部描かれず、ほかは全部描かれる）
         sx_, sy_ = getattr(sc, "sx", sc), getattr(sc, "sy", sc)
         top_px = y - g.bbox()[1] * sy_
-        first_row = int(math.ceil(top_px - 0.5)) - 1
+        first_row = int(math.floor(top_px - 0.5))
         if first_row - py0 > 0:
             k[:first_row - py0] = 0
         left_px = x_fx / FX + g.bbox()[0] * sx_
@@ -242,7 +244,7 @@ def drawn_bbox(ts1, edge=None, canvas=(1920, 1080)):
     """OFRI に入る描画範囲 (left, top, right, bottom)。描くものが無ければ None。
     VWS は描いた結果からではなく、字形の範囲の実数値 (L, T, R, B) から決めている:
         left   = floor(L + 1/8) − 縁          … 横は 1/8px ぶん右へ寄せてから切り捨て
-        top    = ceil(T − 0.5) − 1 − 縁       … 縦は四捨五入。上は 2 ライン足しのぶん 1 行広い
+        top    = floor(T − 0.5) − 縁          … 縦は四捨五入。上は 2 ライン足しのぶん 1 行広い（字ごとの枠の上端と同じ式）
         right  = floor(R + 1/8) + 1 + 縁
         bottom = floor(B + 0.5) + 1 + 縁
     VWS が保存した 3 種類（見本・縁なしの 1 行もの・別サンプル）と、確認用を VWS で開いたときの書き出し範囲
@@ -255,7 +257,7 @@ def drawn_bbox(ts1, edge=None, canvas=(1920, 1080)):
         return None
     L, T, R, B = rb
     l = int(math.floor(L + 0.125)) - edge
-    t = int(math.ceil(T - 0.5)) - 1 - edge
+    t = int(math.floor(T - 0.5)) - edge
     r = int(math.floor(R + 0.125)) + 1 + edge
     b = int(math.floor(B + 0.5)) + 1 + edge
     sh = ts1.shadow() if hasattr(ts1, "shadow") else None
