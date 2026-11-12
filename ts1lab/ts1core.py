@@ -585,7 +585,7 @@ class TS1:
           - ACMG（倍率 %）は字形も送りも縮める（左・ベースライン基準）。指定が無い文字は直前の値を引き継ぐ
           - ACSP（字間）は「その文字の直前」の間隔に効く（行頭の ACSP は無視）。指定が無い文字は直前の値を引き継ぐ
           - 改行は U+000D（空の字形を持つ）。行送り = 文字サイズ + ALSP（行間）
-          - 各行は CSML の x から幅 CSTR.width の枠内で中央揃え。CSML の y は最終行のベースライン
+          - 一番長い行を CSML の x から幅 CSTR.width の枠内で中央に置き、各行は左端をそろえる。CSML の y は最終行のベースライン
         """
         size_w, size_h = self.char_size
         sp = self.spacings()
@@ -605,12 +605,14 @@ class TS1:
         x0, y0 = self.pos
         bw, _ = self.box
         pitch = size_h + self.line_spacing
+        widths = [sum(c[4] for c in line) + sum(c[2] for c in line[1:]) if line else 0.0 for line in lines]
+        # 複数行: 一番長い行に合わせて全体を枠の中央に置き、各行は左端をそろえる（VWS の書き出しで確認。行ごとの中央揃えではない）
+        block_left = x0 + (bw - max(widths)) / 2 if widths else x0
         out = []
         for li, line in enumerate(lines):
             if not line:
                 continue
-            width = sum(c[4] for c in line) + sum(c[2] for c in line[1:])
-            x = x0 + (bw - width) / 2
+            x = block_left
             y = y0 - (len(lines) - 1 - li) * pitch
             for k, (ch, g, s_, m_, adv) in enumerate(line):
                 if k:

@@ -53,7 +53,16 @@ KNOWN_FONTS = {
              "hints": [["ニューロダン", "B"], ["NewRodin", "B"]]},
     "1121": {"name": "ニューロダン EB", "face": "FOT-ニューロダン Pro EB", "postscript": "NewRodinPro-EB", "weight": 800,
              "hints": [["ニューロダン", "EB"], ["NewRodin", "EB"]]},
+    # 以下は VWS が表示したフォント名から（2026-11-13。字形は B のまま番号だけ変えた .ts1 を VWS で開いて確認）
+    "1113": {"name": "ニューロダン L", "face": "FOT-ニューロダン Pro L", "postscript": "NewRodinPro-L", "weight": 300,
+             "hints": [["ニューロダン", "L"], ["NewRodin", "L"]]},
+    "1115": {"name": "ニューロダン M", "face": "FOT-ニューロダン Pro M", "postscript": "NewRodinPro-M", "weight": 500,
+             "hints": [["ニューロダン", "M"], ["NewRodin", "M"]]},
+    "1123": {"name": "ニューロダン UB", "face": "FOT-ニューロダン Pro UB", "postscript": "NewRodinPro-UB", "weight": 900,
+             "hints": [["ニューロダン", "UB"], ["NewRodin", "UB"]]},
 }
+# VWS で開くと「不明な書体」と出た番号（この番号のフォントは VWS に無い）: 1114, 1116, 1118, 1120, 1122, 1124
+VWS_UNKNOWN_IDS = {1114, 1116, 1118, 1120, 1122, 1124}
 
 
 def load_table(cfg):
@@ -131,6 +140,8 @@ def resolve_font(cfg, fid, ts1, force=False):
     key = str(fid)
     tbl = load_table(cfg)
     e = dict(tbl.get(key, {}))
+    if fid in VWS_UNKNOWN_IDS and not e:
+        e["vws_unknown"] = True
     before = json.dumps(e, sort_keys=True, ensure_ascii=False)
     names = list(e.get("names", []))
     odtt = next((f for f in getattr(ts1, "fonts", []) if f["font_id"] == fid), None) if ts1 is not None else None
@@ -155,6 +166,13 @@ def resolve_font(cfg, fid, ts1, force=False):
                     if prev and force:      # 調べ直しでも、前の候補に入っていなかったものは増やさない
                         keep = [h for h in hits if h["face"] in prev]
                         hits = keep or hits
+                known_face = KNOWN_FONTS.get(key, {}).get("face")
+                if hits and known_face and known_face not in [h_["face"] for h_ in hits]:
+                    # 番号から分かっているフォントと、字形が一致したフォントが違う（字形だけ別のフォントにした .ts1 など）。
+                    # フォント表は書き換えず、この .ts1 についてだけ食い違いを返す
+                    out = dict(e)
+                    out.update({"name": KNOWN_FONTS[key]["name"], "mismatch": hits[0]["face"], "exact": False})
+                    return out
                 if hits:
                     # 同じ字形のフォントが複数あるとき（Pro と ProN など、この文言の字では区別がつかない場合）は、
                     # 名前の手がかり（ファイルの中の名前・登録済みの名前・前に選んだもの）に合うものを優先する
@@ -201,6 +219,11 @@ def font_status(e):
     """フォント表のエントリ → (名前, どこまで確かか) の説明"""
     if not e:
         return "不明", "この PC のフォントに一致するものが無く、名前も登録されていません"
+    if e.get("mismatch"):
+        return e.get("name") or "不明", (f"番号ではこのフォントですが、中の字形は「{e['mismatch']}」です（字形だけ別のフォント）。"
+                                         "VWS の表示は番号のフォント名、見た目は字形のほうになります")
+    if e.get("vws_unknown"):
+        return "不明", "VWS で開くと「不明な書体」と表示される番号です（VWS にこの番号のフォントがありません）"
     name = e.get("name") or e.get("face") or e.get("postscript") or "不明"
     if e.get("exact"):
         if e.get("same_shape"):

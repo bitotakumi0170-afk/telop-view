@@ -171,10 +171,14 @@ def make_extra(src, outdir):
 
 
 def _find_png(folder, stem):
+    """「○○.png」「[○○].png」のほか、後ろに書き足した名前（「[○○]_ニューロダンB.png」など）も探す"""
     for cand in (stem + ".png", f"[{stem}].png"):
         p = os.path.join(folder, cand)
         if os.path.exists(p):
             return p
+    for fn in sorted(os.listdir(folder)):
+        if fn.lower().endswith(".png") and not fn.endswith("_予想.png") and not fn.endswith("_差.png")                 and (fn.startswith(f"[{stem}]") or fn.startswith(stem + "_") and fn[len(stem) + 1:len(stem) + 3] not in ("予想", "差.")):
+            return os.path.join(folder, fn)
     return None
 
 

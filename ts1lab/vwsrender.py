@@ -11,8 +11,8 @@ VWS の描き方（見本と、確認用の縁 3px・縁 10px・サイズ 60・�
   5. 1 画素 = 8×8 の点を数える → 1 ラインぶんの文字面 m (0..64)
   6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとに上端を整数行に丸めて、その上にはみ出す行は切る。
      左も、字の左端（実数）が画素の右 1/8 に入っていたら、その画素列は描かない
-  7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量は i² + j² ≤ 1.15 × 縁² の全整数点。縁 3・6・10px で確認）
-  8. 色 = (縁色 × 256 + (文字色 − 縁色) × (a + 1)) >> 8、a = min(255, 2 × k)。アルファ = min(255, 2 × 縁の k)
+  7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量の形は EDGE_ROWS の実測値。縁 1・2・3・5・6・10・14・20px）
+  8. 縁の層（縁色・Ae）の上に文字面の層（文字色・Af）を重ねる。整数の式は compose の説明
 見本と確認用 5 本の 6 枚すべてで、VWS の PNG と 1 画素も違わない（100%）。
 影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。縁なし・縁 3/6/10px 以外・文字が縁より暗い色は VWS では未確認。
 """
@@ -113,17 +113,42 @@ def fill_gdi(polys, w, h):
     return np.cumsum(acc, axis=1)[:, :w] != 0
 
 
-EDGE_R2 = 1.15   # 縁のずらし量の円の半径² = EDGE_R2 × 縁²（半径 ≒ 縁 × 1.07）
+# 縁のずらし量の形（行 j = 0, 1, 2, … ごとの最大の |i|。上下左右に折り返して使う）。VWS の書き出し PNG から逆算した実測値。
+# どの縁幅も、この形で VWS の PNG のアルファと 1 画素も違わない（縁 1・2px は色の重ね方の違いが少し残る。compose 参照）。
+# 円 i² + j² ≤ T とは一致しない（例: 20px は (5, 20) が入って (20, 5) が入らない）。式は見つかっていない
+EDGE_ROWS = {
+    1: [1, 1],
+    2: [2, 2, 1],
+    3: [3, 3, 2, 1],
+    5: [5, 5, 5, 4, 4, 2],
+    6: [6, 6, 6, 5, 5, 4, 2],
+    10: [10, 10, 10, 10, 9, 9, 8, 8, 7, 5, 3],
+    14: [14, 14, 14, 14, 14, 13, 13, 12, 12, 11, 10, 9, 8, 6, 4],
+    20: [20, 20, 20, 20, 20, 19, 19, 19, 19, 18, 18, 17, 16, 16, 15, 14, 13, 11, 10, 8, 5],
+}
+EDGE_FALLBACK_C = 0.62   # 表に無い縁幅: 円 i² + j² ≤ (縁 + 0.62)²（10・14px と同じ形になる値。4・7〜9px などは 1 段ずれる可能性あり）
+
+
+def edge_measured(edge):
+    """その縁幅の形が VWS で実測済みか"""
+    return int(round(edge)) in EDGE_ROWS
 
 
 def edge_offsets(edge):
-    """縁のずらし量（整数点の円板）。VWS の PNG から逆算した範囲:
-        縁 3px: i² + j² ≤ 10（13 は入らない） / 6px: ≤ 41（45 は入らない） / 10px: ≤ 113（116 は入らない）
-    3 つとも満たす式として 半径² = 1.15 × 縁² を使う（半径 = 縁 + 0.5 では 10px が合わない）。
-    ほかの縁幅では未確認（1・2・4・5px と 13px 以上は、式の選び方で 1 段ずれる可能性がある）"""
-    r2 = EDGE_R2 * edge * edge
-    n = int(math.floor(math.sqrt(r2)))
-    return [(i, j) for i in range(-n, n + 1) for j in range(-n, n + 1) if i * i + j * j <= r2]
+    """縁のずらし量（整数点の集合）"""
+    e = int(round(edge))
+    rows = EDGE_ROWS.get(e)
+    if rows is None:
+        r2 = (e + EDGE_FALLBACK_C) ** 2
+        n = int(math.floor(math.sqrt(r2)))
+        return [(i, j) for i in range(-n, n + 1) for j in range(-n, n + 1) if i * i + j * j <= r2]
+    pts = set()
+    for j, m in enumerate(rows):
+        for i in range(0, m + 1):
+            for si in (1, -1):
+                for sj in (1, -1):
+                    pts.add((si * i, sj * j))
+    return sorted(pts)
 
 
 def _dilate(a, offs):
@@ -231,24 +256,29 @@ def drawn_bbox(ts1, edge=None, canvas=(1920, 1080)):
 
 
 def compose(kf, face_rgb, edge_rgb, edge):
-    """k_f → RGBA (uint8)。VWS と同じ整数の計算:
-        文字面の不透明度 a = min(255, 2 × k)
-        色 = (縁色 × 256 + (文字色 − 縁色) × (a + 1)) >> 8      … よくある「(a + 1) を掛けて 256 で割る」重ね方
-        アルファ = min(255, 2 × 縁の k)
-    見本（白 / 青）と確認用の色変更（黄 #FFE600 / 黒）の全部の色がこの式どおり（文字色 < 縁色 のときの丸めは未確認）"""
+    """k_f → RGBA (uint8)。VWS と同じ整数の計算（縁の層の上に文字面の層を重ねる）:
+        文字面の不透明度 Af = min(255, 2 × 文字面の k)、縁の不透明度 Ae = min(255, 2 × 縁の k)（縁なしなら 0）
+        アルファ A = Ae + ((255 − Ae) × (Af + 1) >> 8)                         … 全画像で 1 画素も外れない
+        色: Af = 0 なら縁色。それ以外は w = (Af × 255 + 1) // A として 縁色 + ((文字色 − 縁色) × (w + 1) >> 8)
+            （>> は負の数でも切り捨て。縁が不透明なら w = Af。縁が半透明の所に文字面が重なる画素だけ、1 段ずれることがある）
+    見本・確認用の全部（白/青、黄/黒、暗い灰/白）で、縁が不透明な所の色は 1 画素も違わない"""
+    fi = np.array(face_rgb[:3], np.int64)[None, None]
+    af = np.minimum(255, 2 * kf).astype(np.int64)
     if edge and edge > 0:
         ke = _dilate(kf, edge_offsets(edge))
-        base = np.array(edge_rgb[:3], np.int64)
+        ae = np.minimum(255, 2 * ke).astype(np.int64)
+        base = np.array(edge_rgb[:3], np.int64)[None, None]
     else:
-        ke = kf
-        base = np.array(face_rgb[:3], np.int64)
-    fi = np.array(face_rgb[:3], np.int64)
+        ae = np.zeros_like(af)
+        base = fi
+    A = ae + (((255 - ae) * (af + 1)) >> 8)
+    w = (af * 255 + 1) // np.maximum(A, 1)
+    rgb = base + (((fi - base) * (w + 1)[..., None]) >> 8)
+    rgb = np.where((af == 0)[..., None], base, rgb)
     out = np.zeros(kf.shape + (4,), np.uint8)
-    a = np.minimum(255, 2 * kf).astype(np.int64)[..., None]
-    rgb = (base[None, None] * 256 + (fi - base)[None, None] * (a + 1)) >> 8
     out[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
-    out[..., 3] = np.minimum(255, 2 * ke).astype(np.uint8)
-    out[ke == 0] = 0
+    out[..., 3] = np.clip(A, 0, 255).astype(np.uint8)
+    out[A == 0] = 0
     return out
 
 
