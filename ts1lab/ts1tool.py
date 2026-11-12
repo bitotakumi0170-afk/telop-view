@@ -94,6 +94,20 @@ def cmd_text(a):
 def cmd_compare(a):
     from calibrate import compare
     t = load(a.ts1)
+    # まず VWS と同じ描き方（vwsrender）で描いて、画素単位で比べる
+    try:
+        import numpy as np
+        from PIL import Image
+        import vwsrender
+        ref = np.asarray(Image.open(a.ref).convert("RGBA")).astype(int)
+        out = np.asarray(vwsrender.render_rgba(t, canvas=(ref.shape[1], ref.shape[0]), color_order=a.color_order)).astype(int)
+        ink = (ref[..., 3] > 0) | (out[..., 3] > 0)
+        d = np.abs(out - ref).max(-1) * ink
+        n, tot = int((d > 0).sum()), int(ink.sum())
+        print(f"VWS と同じ描き方での照合: 色のある {tot} 画素のうち違う画素 {n}（完全一致 {100 * (1 - n / max(tot, 1)):.3f}%、最大差 {int(d.max())}）")
+    except Exception as e:  # 画像の大きさが違うなど
+        print("VWS と同じ描き方での照合はできませんでした:", e)
+    # 以下は旧モデル（render.py）での当てはめ。位置や縁幅のずれの目安
     r = compare(t, a.ref, color_order=a.color_order, diff_path=a.diff)
     print(json.dumps(r, ensure_ascii=False, indent=1, default=str))
     if a.diff:
@@ -145,12 +159,12 @@ def cmd_selftest(a):
     t2 = TS1(t.rebuild(chars=chars, glyphs=glyphs))
     check("同じ文言で組み直し → 文字列が一致", t2.text == t.text)
     check("同じ文言で組み直し → 字間が一致", t2.spacings()[:len(t.text)] == t.spacings()[:len(t.text)])
-    bb = t.ink_bbox(edge=(t.edge_width() or 6) + 1)  # ファイルの縁幅で計算（縁 6px 決め打ちだと縁を変えた .ts1 が NG になる）
-    sh = t.shadow()
-    if sh:   # 影は右下へ広がる（別サンプル: 縁 6 + 影 8〜10px）
-        bb = (bb[0], bb[1], bb[2] + sh["reach"], bb[3] + sh["reach"])
-    check(f"推定レイアウトの描画範囲 {tuple(round(v) for v in bb)} が OFRI {t.ofri_bbox} と ±3px 以内",
-          all(abs(x - y) <= 3 for x, y in zip(bb, t.ofri_bbox)))
+    import vwsrender
+    bb = vwsrender.drawn_bbox(t)     # VWS と同じ描き方で描いた範囲（影つきは推定を含む）
+    if bb is None:
+        bb = t.ink_bbox(edge=(t.edge_width() or 6) + 1)
+    check(f"描いてみた範囲 {tuple(round(v) for v in bb)} が OFRI {tuple(round(v) for v in t.ofri_bbox)} と ±1px 以内",
+          all(abs(x - y) <= 1 for x, y in zip(bb, t.ofri_bbox)))
     sys.exit(0 if ok else 1)
 
 

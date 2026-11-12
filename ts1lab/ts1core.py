@@ -702,7 +702,17 @@ class TS1:
         # ---- OFRI 描画範囲の更新
         if changed:
             tmp = TS1(bytes(out))
-            bb = tmp.ink_bbox(edge=(edge_width or self.edge_width() or 6) + 1)
+            bb = None
+            try:    # VWS と同じ描き方で実際に描いて範囲を出す（見本では OFRI と 4 辺とも一致）
+                import vwsrender
+                bb = vwsrender.drawn_bbox(tmp)
+                # 画面の端にかかるときは描いた範囲が切れているので、輪郭からの見積もりに任せる
+                if bb and (bb[0] <= 0 or bb[1] <= 0 or bb[2] >= 1920 or bb[3] >= 1080):
+                    bb = None
+            except Exception:
+                bb = None
+            if bb is None:
+                bb = tmp.ink_bbox(edge=(edge_width or self.edge_width() or 6) + 1)
             if bb:
                 struct.pack_into("<iiii", out, self.ofri_bbox_off, *(fx(round(v)) for v in bb))
         return bytes(out)

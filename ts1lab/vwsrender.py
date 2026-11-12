@@ -5,14 +5,17 @@ VWS の描き方（見本 1 件・縁 6px・ニューロダン B 100px で確認
      （1 字の送りが 100px ではなく 99.99px。7 字目で 1/8px の段差が出る）
   2. 輪郭の点（2048 単位）を 8 倍の格子へ: (int)(座標 × サイズ × 8 / 2048)。C の整数変換 = 0 方向へ切り捨て
      （x は左へ、ベースラインより上の y は下へ寄る）
-  3. 2 次ベジェ曲線は、整数のまま半分ずつに割る（中点も 0 方向へ切り捨て）。十分まっすぐなら割るのをやめて直線でつなぐ
+  3. 2 次ベジェ曲線は、整数のまま半分ずつに割る（中点 (a + b) / 2 も 0 方向へ切り捨て）。
+     弦の中点 p0 + (p1 − p0) / 2 と制御点の差 h が hx² + hy² ≤ 17 になったら割るのをやめて直線でつなぐ
   4. 多角形を GDI と同じ規則で塗る（8 倍サイズ・整数座標の点で内外判定・左と上を含み右と下を含まない）
   5. 1 画素 = 8×8 の点を数える → 1 ラインぶんの文字面 m (0..64)
   6. 上下 2 ラインを足す: k[y] = m[y] + m[y+1] (0..128)。字ごとに上端を整数行に丸めて、その上にはみ出す行は切る
   7. 縁 = 文字面 k を 1px 刻みでずらしたコピーの最大値（ずらし量は i² + j² ≤ (縁 + 0.5)² の全整数点）
   8. 色 = 切り捨て(縁色′ + (文字色′ − 縁色′) × k / 128)、アルファ = min(255, 2 × 縁の k)
      内部の色′は 8bit 値に端数が乗っている（R +0.90〜0.95、G +0.81、B +0.10。見本の白と青から逆算）
-直線だけの字は画素単位で完全に一致する。6〜8 は VWS の画像から逆算した文字面を使うと全画素で一致する。
+見本（16 字）では、色のある 120,056 画素のうち VWS の PNG と違うのは 2 画素（差 2/255）だけ = 99.998% が完全一致。
+残る 2 画素は「な」の輪郭の先端の 1 点（8×8 のうち 1 点。閉じる辺と最初の曲線がつながる頂点）で、本物の GDI で塗っても同じ差が出る。
+影（装飾の種別 1）は未対応（画像つきのサンプルが無い）。
 """
 from __future__ import annotations
 
@@ -25,8 +28,13 @@ from ts1core import COLOR_ORDER, PRIM_LINE, PRIM_QSPLINE, PRIM_CSPLINE
 
 SS = 8                 # 1px を 8×8 に分ける
 ADVANCE_SCALE = 0.9999  # 字送りの倍率（行の先頭字の位置を基準）
-# 曲線を割るのをやめる条件: 2 階差分 (p0 − 2c + p1) の大きさの 2 乗がこの値以下（8 倍格子の単位）
-FLAT_SQ = 72
+# 曲線を割るのをやめる条件（8 倍格子の整数）:
+#   h = p0 + (p1 − p0) / 2 − c   … 弦の中点と制御点の差。割り算は C の整数割り算（0 方向へ切り捨て）
+#   hx² + hy² ≤ FLAT_SQ なら割らずに直線でつなぐ
+# 見本の 16 字・曲線 309 本（割る/割らないが画像から確かめられる 702 か所）すべてがこの式どおり。
+# 17 は割らない・18 は割る、まで確認済み（しきい値は 17 以上 18 未満のどこか）。
+# 「p0 − 2c + p1」（2 階差分）で判定すると奇数のときの丸めが合わず、十数本の曲線で割り方が食い違う。
+FLAT_SQ = 17
 MAX_DEPTH = 8
 # 内部の色′ = 8bit 値 + COLOR_BIAS + COLOR_GAIN × 値 / 255（チャンネルごと。見本の 129 色すべてが再現できる値）
 COLOR_BIAS = (0.902, 0.81, 0.10)
@@ -39,8 +47,9 @@ def _tdiv2(a, b):
 
 
 def _subdivide(p0, c, p1, out, depth=0):
-    ddx, ddy = p0[0] - 2 * c[0] + p1[0], p0[1] - 2 * c[1] + p1[1]
-    if depth >= MAX_DEPTH or ddx * ddx + ddy * ddy <= FLAT_SQ:
+    hx = p0[0] + int((p1[0] - p0[0]) / 2) - c[0]
+    hy = p0[1] + int((p1[1] - p0[1]) / 2) - c[1]
+    if depth >= MAX_DEPTH or hx * hx + hy * hy <= FLAT_SQ:
         out.append(p1)
         return
     q0 = (_tdiv2(p0[0], c[0]), _tdiv2(p0[1], c[1]))
@@ -161,6 +170,25 @@ def face_counts(ts1, canvas=(1920, 1080)):
             sub = k[cy0 - py0:cy1 - py0, cx0 - px0:cx1 - px0]
             np.maximum(kf[cy0:cy1, cx0:cx1], sub, out=kf[cy0:cy1, cx0:cx1])
     return kf
+
+
+def drawn_bbox(ts1, edge=None, canvas=(1920, 1080)):
+    """OFRI に入る描画範囲 (left, top, right, bottom) を、実際に描いた文字面から求める。描くものが無ければ None。
+    見本: 文字面の画素範囲 (204, 946)-(1786, 1043) → OFRI (198, 940, 1793, 1049)
+      = 左・上は 縁ぶん外、下は 縁ぶん外、右だけ 縁 + 1 外（右の +1 は見本 1 件からの値）
+    影があるとき（別サンプル 1 件。画像が無いので推定）: 右へ 影の広がり、下へ 影の広がり + 2"""
+    edge = ts1.edge_width() if edge is None else edge
+    edge = int(edge or 0)
+    kf = face_counts(ts1, canvas)
+    ys, xs = np.nonzero(kf)
+    if len(ys) == 0:
+        return None
+    l, t, r, b = int(xs.min()) - edge, int(ys.min()) - edge, int(xs.max()) + 1 + edge + 1, int(ys.max()) + 1 + edge
+    sh = ts1.shadow() if hasattr(ts1, "shadow") else None
+    if sh:
+        r += int(sh["reach"])
+        b += int(sh["reach"]) + 2
+    return (l, t, r, b)
 
 
 def _internal(color):
