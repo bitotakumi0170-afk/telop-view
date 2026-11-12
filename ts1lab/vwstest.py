@@ -22,6 +22,7 @@ PNG は 全画面（1920×1080）でも、描画範囲だけ切り抜いたも�
 """
 import os
 import shutil
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -462,6 +463,92 @@ def origins(folder):
             print(f"    y={y:g}:  " + "   ".join(rows[y]))
 
 
+
+# ---------------------------------------------------------------------------
+# 装飾を 1 層ずつに分けた確認用（第 4 回）
+# ---------------------------------------------------------------------------
+DECO_PLAN = [
+    # (元ファイル名に含まれる文字, 出力名, 残す層の番号, {層番号: 太さ} で太さを書き換え（無ければそのまま）)
+    ("金", "51_金_文字面だけ", [0], None),
+    ("金", "52_金_文字面_帯なし", [0], {0: 0}),
+    ("金", "53_金_種別3だけ", [2], None),
+    ("金", "54_金_光彩だけ", [4], None),
+    ("赤", "55_赤_文字面だけ", [2], None),
+    ("赤", "56_赤_光沢だけ", [0], None),
+    ("赤", "57_赤_内側の縁だけ", [1], None),
+    ("赤", "58_赤_種別16だけ", [5], None),
+    ("赤", "59_赤_種別3だけ", [6], None),
+    ("二色", "60_二色_模様だけ", [0], None),
+    ("二色", "61_二色_種別4だけ", [2], None),
+    ("二色", "62_二色_縁4追加5だけ", [5], None),
+    ("縞", "63_縞_模様だけ", [0], None),
+]
+
+
+def _adco_entry_offsets(data):
+    """ファイル中のすべての ADCO について、層ごとの先頭位置の一覧を返す → [[層 0 の位置, 層 1 の位置, …], …]"""
+    import re
+    out = []
+    for m in re.finditer(rb"ADCO", data):
+        o = m.start()
+        size = struct.unpack_from("<I", data, o + 4)[0]
+        if size < 12 or o + size > len(data) or struct.unpack_from("<H", data, o + 8)[0] != 1:
+            continue
+        n = data[o + 10]
+        e = o + 8 + (20 if data[o + 11] else 4)
+        offs = []
+        for _ in range(n):
+            if e + 50 > o + size:
+                break
+            offs.append(e)
+            e += 50 + 32 * struct.unpack_from("<H", data, e + 2)[0]
+        if len(offs) == n and e == o + size:
+            out.append(offs)
+    return out
+
+
+def make_deco(srcdir, outdir):
+    """装飾つきの .ts1（装飾サンプル）から、1 層だけ残した確認用を作る。
+    長さは変えず、消す層の不透明度（層の先頭 +32 の u16。256 = 100%）を 0 に書き換えるだけ。
+    描画範囲 OFRI は元のまま（VWS は開いたときに計算し直す）"""
+    os.makedirs(outdir, exist_ok=True)
+    srcs = [f for f in sorted(os.listdir(srcdir)) if f.endswith(".ts1")]
+    made = []
+    for key, name, keep, widths in DECO_PLAN:
+        src = next((f for f in srcs if key in f), None)
+        if not src:
+            print(f"{name}: 元になる .ts1（名前に「{key}」を含むもの）がありません")
+            continue
+        with open(os.path.join(srcdir, src), "rb") as f:
+            data = bytearray(f.read())
+        groups = _adco_entry_offsets(bytes(data))
+        if not groups:
+            print(f"{name}: 装飾（ADCO）が見つかりません")
+            continue
+        for offs in groups:
+            for i, e in enumerate(offs):
+                if i not in keep:
+                    struct.pack_into("<H", data, e + 32, 0)
+                elif widths and i in widths:
+                    struct.pack_into("<ii", data, e + 34, widths[i], widths[i])
+        TS1(bytes(data))            # 読めることだけ確かめる
+        with open(os.path.join(outdir, name + ".ts1"), "wb") as f:
+            f.write(data)
+        made.append(name)
+        print(f"{name}.ts1  ← {src}（{len(groups)} 個の装飾 × {len(groups[0])} 層のうち 層 {keep} だけ残す）")
+    note = """VWS 確認用・第 4 回（装飾を 1 層ずつに分けたもの）
+
+送ってもらった装飾つきのテロップ 4 本をもとに、装飾の層を 1 つだけ残したファイルです。
+1 本ずつ VWS で開いて、そのまま PNG で書き出してください（名前はそのままで大丈夫です）。
+
+・開けない、真っ白、元と同じ見た目のまま、というものがあっても、それも結果なのでそのまま教えてください
+  （消したい層の「不透明度」を 0 にしてあります。VWS がそれをどう扱うかも確かめたい点です）
+・時間が無ければ 51・52・54・55・56 の 5 本だけでも進みます
+"""
+    with open(os.path.join(outdir, "やり方.txt"), "w", encoding="utf-8-sig", newline="\r\n") as f:
+        f.write(note)
+    return made
+
 def check(folder):
     found = 0
     for fn in sorted(os.listdir(folder)):
@@ -494,9 +581,14 @@ def check(folder):
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ("make", "extra", "probe", "origins", "check"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("make", "extra", "probe", "deco", "origins", "check"):
         print(__doc__)
         return 1
+    if sys.argv[1] == "deco":
+        src = sys.argv[2]
+        out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(src)), "VWS確認用_第4回")
+        make_deco(src, out)
+        return 0
     if sys.argv[1] == "extra":
         src = sys.argv[2]
         out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(os.path.dirname(os.path.abspath(src)), "VWS確認用_追加")

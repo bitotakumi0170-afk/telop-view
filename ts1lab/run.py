@@ -593,7 +593,16 @@ def info(cfg, path):
     print(f"  文字サイズ {i['char_size'][0]:g}×{i['char_size'][1]:g} / 行間 {i['line_spacing']:g} / VWS フォント番号 {i['font_id']}")
     describe_fonts(cfg, t)
     for d in i["decorations"]:
-        print(f"  装飾{d['index']}: {d['role_ja']} 色 {d['color_hex']} 不透明度 {d['opacity']}% 太さ {d['width']}px")
+        if d.get("gradient"):
+            stops = " → ".join("#%02X%02X%02X" % c[:3] for _, c in d["gradient"]["stops"])
+            col = f"グラデーション {stops}" + ("（模様の画像つき）" if d["gradient"]["image"] else "")
+        elif d.get("resource_type") == "CPTN":
+            col = "模様の画像"
+        else:
+            col = f"色 {d['color_hex']}"
+        op = d.get("opacity256", 256) * 100 / 256
+        print(f"  装飾{d['index']}: {d['role_ja']} {col} 不透明度 {op:g}% 太さ {d.get('width_px', d['width'])}px"
+              + (f" + 追加 {d['extra']}px" if d.get("extra") else ""))
     print(f"  字間: {i['spacings'][:len(i['text'])]}")
     out = os.path.splitext(path)[0] + "_構造.txt"
     with open(out, "w", encoding="utf-8-sig") as f:

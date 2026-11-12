@@ -287,6 +287,20 @@ class HistoryEntry:
 COLOR_ORDER = "BGRA"
 
 
+def decode_gradient(raw, order=COLOR_ORDER):
+    """CGRD（グラデーション）→ {"stops": [(位置 0..255, (r, g, b, a))...], "image": 模様の画像（WPF1）があるか}
+
+    CGRD = タグ, 長さ, u16 版, u16 使用回数, 6 バイト（0）, u8 色の数 n, 色 4 バイト × n（CRGB と同じ並び）, 位置 u8 × n,
+           [WPF1 画像（模様。圧縮されていて、まだ展開できていない）], 末尾（0 が並び、04 … 05 … と続く。未解明）"""
+    n = raw[18]
+    cols = []
+    for i in range(n):
+        c = raw[19 + 4 * i:23 + 4 * i]
+        cols.append((c[0], c[1], c[2], c[3]) if order == "RGBA" else (c[2], c[1], c[0], c[3]))
+    pos = list(raw[19 + 4 * n:19 + 5 * n])
+    return {"stops": list(zip(pos, cols)), "image": raw.find(b"WPF1") >= 0}
+
+
 def decode_color(raw, order=COLOR_ORDER):
     """CRGB チャンク → (r, g, b, a)"""
     c = raw[14:18]
@@ -410,6 +424,19 @@ class TS1:
     def glyphs(self):
         return [r for t, r in self.resources if t == "RCHR"]
 
+    def glyph_at(self, index):
+        """MCHR のグリフ番号 → Glyph。番号は ORMP の添字（リソース全体の通し番号）。
+        グリフだけが先頭に並ぶファイルではグリフの並び順と同じだが、字ごとに装飾を変えたファイルでは
+        色・グラデーションがグリフの間に挟まる（装飾サンプル「二色」）"""
+        if 0 <= index < len(self.resources) and self.resources[index][0] == "RCHR":
+            return self.resources[index][1]
+        return self.glyphs[index]
+
+    def glyphs_in_order(self):
+        """グリフが ORMP の先頭に切れ目なく並んでいるか（rebuild はこの形だけ対応）"""
+        n = len(self.glyphs)
+        return all(t == "RCHR" for t, _ in self.resources[:n])
+
     def colors(self, order=COLOR_ORDER):
         """CRGB リソースの色を (r, g, b, a) で返す（ORMP 内の順）"""
         out = []
@@ -421,22 +448,41 @@ class TS1:
     def decorations(self, order=COLOR_ORDER):
         """先頭文字の ADCO（装飾）を読み、文字面・縁などの色と太さを返す
 
-        ADCO = u16 ver, u16 件数, (50 バイト + 拡張 32 バイト × ext) × 件数
-          +0  u16 種別   (0 = 文字面, 9 = 縁, 1 = 影)
+        ADCO = u16 ver, u8 件数, u8 追加見出しの有無, [追加見出し 16 バイト], (50 バイト + 拡張 32 バイト × ext) × 件数
+          追加見出し: 2 つめのバイトが 1 のときだけある（装飾サンプル「赤」。中身は 01 00 … 00。意味は未確認）
+          +0  u16 種別   (0 = 文字面, 9 = 縁, 1 = 影。ほかに 3・4・0x10・0x800・0x801 → FORMAT.md「装飾の種別」)
           +2  u16 ext    (1 のとき 1 件が 32 バイト長い。1 行もの（CSSL）の文字面で 1。中身は 0)
-          +4  u32 色リソース番号（ORMP の添字 → CRGB）
-          +28 u32 描画順? (文字面 5 / 縁 4)
-          +33 u8  有効? (1)
-          +34 u32 太さ px (縁 6)
-          +38 u32 太さ2 px (縁 6)
+          +4  u32 色リソース番号（ORMP の添字 → CRGB 単色 / CGRD グラデーション・模様つき / CPTN 模様）
+          +8  u32 不明（模様つきの文字面で 0x30、「赤」の光沢で 0x100）
+          +28 u16 重ね方? (4 が普通。上に重ねる半透明の文字面は 5、「赤」の文字面は 6)
+          +30 u16 追加分 px
+          +32 u16 不透明度（256 = 100%。128 = 50%）。以前「+33 u8 有効」と読んでいたのは、この上位バイト
+          +34 i32 太さ px（縁 6。光彩（0x800）は負の値）
+          +38 i32 太さ2 px
+        1 件目が一番上。下へ順に重ねる（「二色」: 模様つきグラデーション 50% → 単色の文字面 → … → 光彩）
+        self の先頭文字の ADCO だけを読む（字ごとに装飾が違うファイルは decorations_of(ch) を使う）
         """
-        p = self.base_attr("ADCO")
+        return self._decode_adco(self.base_attr("ADCO"), order)
+
+    def decorations_per_char(self, order=COLOR_ORDER):
+        """各文字の装飾の一覧。ADCO が無い文字は直前の文字のものを引き継ぐ
+        （装飾サンプル「二色」で確認: 3 字目で黄色の装飾に変わり、ADCO の無い 4〜6 字目も黄色）"""
+        cur, out = [], []
+        for ch in self.chars:
+            if "ADCO" in ch.attrs:
+                cur = self._decode_adco(ch.attrs["ADCO"], order)
+            out.append(cur)
+        return out
+
+    def _decode_adco(self, p, order=COLOR_ORDER):
         if not p:
             return []
-        n = u16(p, 2)
+        n = p[2]
         out = []
-        roles = {0: ("face", "文字面"), 9: ("edge", "縁"), 1: ("shadow", "影")}
-        e = 4
+        roles = {0: ("face", "文字面"), 9: ("edge", "縁"), 1: ("shadow", "影"),
+                 0x800: ("glow", "光彩（外へぼかす）"), 0x801: ("face", "文字面（内側に帯。面取り?）"),
+                 3: ("other", "種別 3（右下への立体?）"), 4: ("other", "種別 4（右下への立体?）"), 0x10: ("other", "種別 16（影?）")}
+        e = 20 if p[3] else 4
         for k in range(n):
             if k:
                 e += 50 + 32 * u16(p, e + 2)     # 直前の 1 件の長さ
@@ -447,6 +493,11 @@ class TS1:
             color = decode_color(raw, order) if t == "CRGB" else None
             role, role_ja = roles.get(kind, ("other", f"種別 {kind}"))
             out.append({
+                "resource_type": t,                              # CRGB = 単色 / CGRD = グラデーション / CPTN = 模様
+                "gradient": decode_gradient(raw, order) if t == "CGRD" else None,
+                "opacity256": u16(p, e + 32),                    # 256 = 100%
+                "width_px": i32(p, e + 34),                      # 符号つき（光彩は負）
+                "flags": u32(p, e + 8),
                 "index": k,
                 "kind": kind,
                 "role": role,
@@ -493,10 +544,21 @@ class TS1:
         p += 2
         assert b[p:p + 4] == b"ESET"
         p += 10
-        c = p
+        # 要素の並び（文字 CSML / CSSL のほか、図形のまとまり CGRP など）。最初の文字要素を「主」として読む
+        nelem = u16(b, p - 2)
+        self.elements = []           # [(タグ, 位置, 長さ)]
+        q = p
+        for _ in range(nelem):
+            t_, s_ = chunk_at(b, q)
+            self.elements.append((t_.decode("latin1"), q, s_))
+            q += s_
+        assert q == len(b), "SLYR の要素の並びがファイル末尾と合わない"
+        texts = [el for el in self.elements if el[0] in ("CSML", "CSSL")]
+        if not texts:
+            raise ValueError(f"0x{p:x}: 文字の要素（CSML / CSSL）がありません: {[el[0] for el in self.elements]}")
+        c = texts[0][1]
+        c_end = c + texts[0][2]
         ctag, _ = chunk_at(b, c)
-        if ctag not in (b"CSML", b"CSSL"):
-            raise ValueError(f"0x{c:x}: b'CSML' か b'CSSL' を期待したが {ctag!r}")
         self.kind = ctag.decode()      # CSML = 文字枠つき（複数行） / CSSL = 1 行もの（枠なし）
         self.off["CSML"] = c
         self.pos = (i32(b, c + 10) / FIX, i32(b, c + 14) / FIX)  # (x, ベースライン y)
@@ -517,7 +579,7 @@ class TS1:
             ch, sz = parse_mchr(b, p)
             self.chars.append(ch)
             p += sz
-        assert p == len(b), "MCHR 列のあとに未知のデータ"
+        assert p == c_end, "MCHR 列のあとに未知のデータ"
         self.xtrs = []  # トランジション（イン/アウト）の座標オフセット
         p = c
         while True:
@@ -613,7 +675,7 @@ class TS1:
             if ch.code in (0x0A, newline_code):
                 lines.append(cur); cur = []
                 continue
-            g = glyphs[ch.glyph_index]
+            g = self.glyph_at(ch.glyph_index)
             cur.append((ch, g, int(math.floor(s_ * FIX)), m_, g.advance_fx(size_w * m_[0] / 100)))
         lines.append(cur)
         x0 = int(round(self.pos[0] * FIX))
@@ -647,7 +709,7 @@ class TS1:
             if ch.code in (0x0A, newline_code):
                 out.append(cur); cur, n = 0, 0
                 continue
-            cur += self.glyphs[ch.glyph_index].advance_fx(size_w * m_[0] / 100) + (int(math.floor(s_ * FIX)) if n else 0)
+            cur += self.glyph_at(ch.glyph_index).advance_fx(size_w * m_[0] / 100) + (int(math.floor(s_ * FIX)) if n else 0)
             n += 1
         out.append(cur)
         return out
@@ -690,6 +752,9 @@ class TS1:
         pos = (枠の左, ベースライン)。1 行もの（CSSL）では「元の行の幅のまま左をここに置いたときの中心」を保って、
         新しい文言の幅に合わせて左位置と行の幅を書き直す"""
         b = self.data
+        if len(self.elements) != 1 or not self.glyphs_in_order():
+            raise NotImplementedError("このファイルは書き出しにまだ対応していません（図形や 2 つめの文字が入っている、"
+                                      "または字ごとに装飾が違う）。読み取りと表示はできます")
         args = dict(chars=chars, glyphs=glyphs, face_color=face_color, edge_color=edge_color, clear_history=clear_history,
                     keep_glyph_header=keep_glyph_header, edge_width=edge_width, color_order=color_order)
         pos_in = pos

@@ -60,7 +60,9 @@ SCHEMA = {
              ("right", "fx", "描画範囲 右"), ("bottom", "fx", "描画範囲 下")],
     "OOCI": [("ver", "u16", ""), ("zero", "b10", ""), ("frames", "u32", "イン側の長さ? (60)")],
     "OOCO": [("ver", "u16", ""), ("zero", "b10", ""), ("frames", "u32", "アウト側の長さ? (60)")],
-    "CRGB": [("ver", "u16", ""), ("type", "u32", "色種別 (1 = 単色)"), ("color", "rgba", "R G B A")],
+    "CRGB": [("ver", "u16", ""), ("type", "u32", "使用回数（この色を指している装飾の数。以前「色種別」と読んでいた）"), ("color", "rgba", "R G B A")],
+    "CGRD": [("ver", "u16", ""), ("usage", "u16", "使用回数"), ("zero", "b6", ""), ("count", "u8", "色の数 n。続けて 色 4 バイト × n、位置 u8 × n、[WPF1 模様の画像]、末尾")],
+    "CPTN": [("ver", "u16", ""), ("usage", "u16", "使用回数"), ("zero", "b6", "続けて WPF4 模様の画像、末尾")],
     "ORSC": [("ver", "u16", ""), ("value", "u32", "不明 (0)")],
     "VIDT": [],
     "MSCR": [("ver", "u16", ""), ("value", "b8", "不明 (0)。1 行もの（CSSL）のファイルにだけある")],
@@ -232,7 +234,13 @@ class Dumper:
         p = self.add(path, p, 2, "u16", struct.unpack_from("<H", b, p)[0], "不明")
         p, n = self.eset(path, p)
         for i in range(n):
-            p = self.csml(f"{path}/CSML[{i}]", p)     # CSSL（1 行もの）も同じ名前で並べる
+            t = b[p:p + 4]
+            if t in (b"CSML", b"CSSL"):
+                p = self.csml(f"{path}/CSML[{i}]", p)     # CSSL（1 行もの）も同じ名前で並べる
+            else:                                         # 図形のまとまり（CGRP）など。中身は未解明
+                _, es = self.hdr(f"{path}/{t.decode('latin1')}[{i}]", p)
+                self.add(f"{path}/{t.decode('latin1')}[{i}]", p + 8, es - 8, "rest", None, "未解明（文字以外の要素）")
+                p += es
         return o + size
 
     def csml(self, path, o):
@@ -306,7 +314,8 @@ class Dumper:
         uscu = b[end - 22:end - 18] == b"USCU"
         emtr_end = end - 22 if uscu else end
         code = struct.unpack_from("<I", b, emtr_end - 16)[0]
-        p = self.fields(path, o + 8, o + 34, [("ver", "u16", ""), ("glyph", "u16", "グリフ番号"), ("zero", "b22", "")])
+        p = self.fields(path, o + 8, o + 34, [("ver", "u16", ""), ("glyph", "u16", "グリフ番号（ORMP の添字）"), ("zero", "b18", ""),
+                                                 ("shift", "fx", "不明（大きさを変えた字に 4〜14、終端に 18 が入ることがある。縦のずらし?）")])
         if b[p:p + 4] == b"DAAR":
             _, ds = self.hdr(path + "/DAAR", p)
             n = struct.unpack_from("<H", b, p + 10)[0]
@@ -328,17 +337,21 @@ class Dumper:
     def adco(self, path, o):
         b = self.b
         _, size = self.hdr(path, o, "ADCO")
-        n = struct.unpack_from("<H", b, o + 10)[0]
-        self.fields(path, o + 8, o + 12, [("ver", "u16", ""), ("count", "u16", "装飾数")])
+        n = b[o + 10]
+        self.fields(path, o + 8, o + 12, [("ver", "u16", ""), ("count", "u8", "装飾数"), ("head2", "u8", "1 のとき追加見出し 16 バイトが続く")])
         p = o + 12
+        if b[o + 11]:
+            self.add(path, p, 16, "head_ext", None, "追加見出し（未解明）")
+            p += 16
         for i in range(n):
             ext = struct.unpack_from("<H", b, p + 2)[0]
             ln = 50 + 32 * ext
             self.fields(f"{path}/[{i}]", p, p + ln, [
-                ("kind", "u16", "0 = 文字面 / 9 = 縁 / 1 = 影"), ("ext", "u16", "1 のとき後ろに 32 バイト付く（1 行ものの文字面で 1）"),
-                ("color_res", "u32", "色リソース番号"),
-                ("zero", "b20", ""), ("order", "u16", "不明 (4 か 5)"), ("extra", "u16", "太さへの追加分 px（外へ広がる量 = 太さ + これ）"),
-                ("u8a", "u8", ""), ("enable", "u8", "1 = 有効 / 0 = 無効"), ("width", "u32", "太さ px"), ("width2", "u32", "太さ 2 px"), ("zero2", "b8", "")])
+                ("kind", "u16", "0 = 文字面 / 9 = 縁 / 1 = 影 / 3・4・16・2048・2049 は FORMAT.md「装飾の種別」"),
+                ("ext", "u16", "1 のとき後ろに 32 バイト付く（1 行ものの文字面で 1）"),
+                ("color_res", "u32", "色リソース番号（CRGB / CGRD / CPTN）"), ("flags", "u32", "不明（模様つきで 0x30、光沢で 0x100）"),
+                ("zero", "b16", ""), ("order", "u16", "重ね方? (4 が普通 / 5・6)"), ("extra", "u16", "太さへの追加分 px（外へ広がる量 = 太さ + これ）"),
+                ("opacity", "u16", "不透明度（256 = 100%）"), ("width", "i32", "太さ px（光彩は負）"), ("width2", "i32", "太さ 2 px"), ("zero2", "b8", "")])
             p += ln
         if p < o + size:
             self.add(path, p, o + size - p, "rest", None, "未解明")
