@@ -20,18 +20,16 @@ CANVAS = (1920, 1080)
 # ----------------------------------------------------------------------------
 def ts1_to_png(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     """キャンバス全体（1920×1080）の透過 PNG"""
-    from PIL import Image
-    face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
-    im = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
-    im.alpha_composite(edge_img, (max(l, 0), max(t, 0)))
-    im.alpha_composite(face, (max(l, 0), max(t, 0)))
-    im.save(out_path)
+    # VWS と同じ手順（8 倍の整数格子・GDI の塗り・上下 2 ライン・ずらし重ねの縁・整数の色計算）で描く
+    import vwsrender
+    vwsrender.render_image(ts1, edge=edge, canvas=CANVAS, color_order=color_order).save(out_path)
     return out_path
 
 
 def ts1_to_psd(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     from psd_tools import PSDImage
-    face, edge_img, (l, t) = render_layers(ts1, edge=edge, color_order=color_order)
+    import vwsrender
+    face, edge_img, (l, t) = vwsrender.render_layers(ts1, edge=edge, canvas=CANVAS, color_order=color_order)
     psd = PSDImage.new("RGBA", CANVAS, color=(0, 0, 0, 0))
     e = psd.create_pixel_layer(edge_img, name="edge", top=t, left=l)
     f = psd.create_pixel_layer(face, name="face", top=t, left=l)
