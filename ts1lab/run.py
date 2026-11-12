@@ -240,7 +240,8 @@ def font_for_ps(cfg, ps_name, ts1=None):
     if not ps_name:
         return None
     for fid, e in load_table(cfg).items():
-        names = [e.get("postscript"), e.get("face")] + list(e.get("names", []))
+        names = [e.get("postscript"), e.get("face"), (e.get("substitute") or {}).get("postscript"),
+                 (e.get("substitute") or {}).get("face")] + list(e.get("names", []))
         hit = any(n and fontfind.norm(n) == fontfind.norm(ps_name) for n in names)
         hit = hit or any(fontfind.hint_match(ps_name, h) for h in e.get("hints", []))
         if hit:
@@ -253,11 +254,62 @@ def _fit_of(e):
 
 
 def _baseline_fit(e):
-    """Photoshop のテキストの縦位置合わせに使う値。フォントファイルから実測した値が無ければ、縦位置のずれ y_shift から作る"""
+    """Photoshop のテキストの縦位置合わせに使う値。フォントファイルから実測した値が無ければ、縦位置のずれ y_shift から作る。
+    PC に無いフォントで代わりのフォントを使っているときは、代わりのフォントで実測した値"""
     f = _fit_of(e)
     if f is None and e and e.get("y_shift") is not None:
         f = {"oy": -(float(e["y_shift"]) + 0.26)}
+    if f is None and e and (e.get("substitute") or {}).get("oy") is not None:
+        f = {"oy": float(e["substitute"]["oy"])}
     return f
+
+
+def _family_key(name):
+    """書体名から版の違い（Pro / ProN / Std / StdN / Pr5 / Pr6N など）を除いたもの。兄弟フォントを探すのに使う"""
+    import re
+    return re.sub(r"\s+", " ", re.sub(r"\s*\b(Pr6N|Pr5N|Pr6|Pr5|ProN|Pro|StdN|Std)\b", "", name, flags=re.I)).strip().lower()
+
+
+def substitute_font(cfg, fid, e, ts1=None):
+    """PC に入っていないフォントの代わりに、Photoshop の編集用テキストで使う兄弟フォント（版だけ違う同じ書体）を探す。
+    見つかれば {"face", "postscript", "oy"} をフォント表の substitute に書いて返す。字の形は近いが点までは一致しない
+    （見た目の正確さは PSD の画像レイヤが受け持つ。編集用テキストの組みと位置を近づけるためのもの）"""
+    if not e or e.get("exact"):
+        return None
+    try:
+        import gdiglyph
+        if not gdiglyph.available():
+            return None
+        keys = {_family_key(n) for n in [e.get("name")] + list(e.get("names", [])) if n}
+        hit = None
+        for face, w, it, cs in gdiglyph.list_styles():
+            if _family_key(face) in keys:
+                with gdiglyph.GdiFont(face, w, cs, it) as f:
+                    nm = f.names()
+                hit = {"face": face, "postscript": nm.get("postscript")}
+                break
+        if not hit or not hit["postscript"]:
+            return None
+        if ts1 is not None:      # 縦位置のずれを、代わりのフォントの輪郭を重ねて実測する
+            try:
+                import fontfind
+                import fontid
+                r = fontfind.find([], postscript=hit["postscript"], cache_path=os.path.join(cfg["_dir"], ".font_cache.json"))
+                if r:
+                    score, fit = fontid.fit_font(ts1, r[0], r[1])
+                    if fit and score >= 0.85:
+                        hit["oy"] = round(fit["oy"], 3)
+                        hit["score"] = round(score, 4)
+            except Exception:
+                pass
+        if e.get("substitute") != hit:
+            e["substitute"] = hit
+            tbl = load_table(cfg)
+            tbl[str(fid)] = {**tbl.get(str(fid), {}), "substitute": hit}
+            save_table(cfg, tbl)
+        return hit
+    except Exception:
+        return None
 
 
 def glyph_source(cfg, fid, e, ts1=None, quiet=False):
@@ -386,10 +438,14 @@ def to_ps(cfg, path):
     ratio, ps_font, hints = 1.0, cfg.get("photoshop_font"), list(cfg.get("font_name_hints", []))
     describe_fonts(cfg, t)
     e = font_for_id(cfg, t.font_id, t)
+    sub = substitute_font(cfg, t.font_id, e, t)
     fit = _baseline_fit(e)
     if e:
         ps_font = e.get("postscript") or ps_font
         hints = list(e.get("hints", [])) + hints
+        if sub:
+            ps_font = sub["postscript"]
+            print(f"  ※ このフォントは PC に無いので、編集用テキストは「{sub['face']}」で組みます（同じ書体の別の版。見た目の画像レイヤは正確です）")
         if e.get("file"):
             try:
                 ratio = FontGlyphSource(e["file"], int(e.get("index", 0)), fit=_fit_of(e)).cell_ratio

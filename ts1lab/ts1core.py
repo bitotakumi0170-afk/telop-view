@@ -679,7 +679,9 @@ class TS1:
         # 色: ADCO の参照先（旧番号）ごとに差し替え
         new_color = {}
         for d in self.decorations():
-            want = face_color if d["role"] == "face" else edge_color
+            if not d["enabled"]:      # 無効にしてある装飾（使っていない文字面など）の色は変えない
+                continue
+            want = face_color if d["role"] == "face" else (edge_color if d["role"] == "edge" else None)
             if want is not None:
                 new_color[d["color_resource"]] = encode_color(want, color_order)
         for j, (t, raw) in enumerate(others):
@@ -884,8 +886,10 @@ class FontGlyphSource:
 
 
 def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
-               spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False):
+               spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False, mags=None):
     """テンプレートの書式で text を組み直し、(chars, glyphs) を返す。
+
+    - mags: 文字ごとの倍率 [(横 %, 縦 %), ...]（None なら全部テンプレート先頭文字の値）。変わる所にだけ ACMG を書く
 
     - グリフ: font 指定時はフォントから生成、未指定ならテンプレートのキャッシュから流用
       prefer_template=True なら、テンプレートにある文字は VWS が作った字形をそのまま使い、無い文字だけフォントから作る
@@ -944,10 +948,27 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
     # 行頭の字間（ACSP）は並べ方に効かないので、雛形の値をそのまま残す（VWS が書いた値を変えない）。
     # ただし書かれていない字は直前の値を引き継ぐので、2 字目は「雛形の行頭の値」と違えば必ず書く
     prev = first.spacing() if spacing is not None else None
+
+    def mag_of(ch):
+        p = ch.attrs.get("ACMG")
+        return (i32(p, 2) / FIX, i32(p, 6) / FIX) if p is not None else (100.0, 100.0)
+
+    prev_mag = mag_of(first)
     chars = []
     for i, c in enumerate(codes):
+        extra, extra_order = {}, []
+        if mags is not None and i < len(mags) and c != 0:
+            m = (float(mags[i][0]), float(mags[i][1]))
+            if i == 0 or m != prev_mag:
+                extra["ACMG"] = struct.pack("<Hii", 1, fx(m[0]), fx(m[1]))
+                extra_order.append("ACMG")
+            prev_mag = m
         if i == 0:
             attrs, order_t = dict(first.attrs), list(first.attr_order)
+            if "ACMG" in extra:
+                if "ACMG" not in attrs:
+                    order_t.append("ACMG")
+                attrs["ACMG"] = extra["ACMG"]
             if size is not None and "ACSZ" in attrs:
                 attrs["ACSZ"] = struct.pack("<Hii", 1, fx(size[0]), fx(size[1]))
             if font_id is not None and "ACTP" in attrs:
@@ -963,8 +984,9 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                 chars.append(Char(0, 0, uscu=first.uscu))
         elif spacing is not None and i < len(spacing) and (spacing[i] != prev or spacing[i] != 0):
             # 字間が変わる文字・0 以外の文字には ACSP を明示（「その文字だけ」「以降継続」どちらの解釈でも同じ結果になる）
-            chars.append(Char(c, index.get(c, 0), {"ACSP": struct.pack("<Hi", 1, fx(spacing[i]))}, ["ACSP"], uscu=first.uscu))
+            chars.append(Char(c, index.get(c, 0), {**extra, "ACSP": struct.pack("<Hi", 1, fx(spacing[i]))},
+                              extra_order + ["ACSP"], uscu=first.uscu))
             prev = spacing[i]
         else:
-            chars.append(Char(c, index.get(c, 0), uscu=first.uscu))
+            chars.append(Char(c, index.get(c, 0), dict(extra), list(extra_order), uscu=first.uscu))
     return chars, glyphs

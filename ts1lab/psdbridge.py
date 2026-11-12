@@ -87,7 +87,7 @@ function findFont() {
   return null;
 }
 var FONT = findFont();
-if (!FONT) { alert("フォントが見つかりません: " + SPEC.font_hints.join(" / ") + "\n仮のフォントで作成します。"); FONT = "MS-Gothic"; }
+if (!FONT) { alert("フォントが見つかりません: " + (SPEC.ps_font || SPEC.font_hints.join(" / ")) + "\n仮のフォントで作成します。"); FONT = "MS-Gothic"; }
 
 var oldRuler = app.preferences.rulerUnits, oldType = app.preferences.typeUnits;
 app.preferences.rulerUnits = Units.PIXELS;
@@ -122,6 +122,8 @@ ti.position = [new UnitValue(SPEC.anchor[0], "px"), new UnitValue(SPEC.anchor[1]
     r.putInteger(s("from"), i); r.putInteger(s("to"), i + 1);
     base.putInteger(s("tracking"), SPEC.tracking[i]);
     base.putUnitDouble(s("size"), c("#Pxl"), SPEC.ps_size);
+    base.putDouble(s("horizontalScale"), SPEC.hscale[i]);   // 文字ごとの倍率（パーセント。VWS の ACMG）
+    base.putDouble(s("verticalScale"), SPEC.vscale[i]);
     base.putEnumerated(s("autoKern"), s("autoKern"), s("manual"));
     base.putInteger(s("kerning"), 0);
     r.putObject(s("textStyle"), s("textStyle"), base);
@@ -211,6 +213,13 @@ PS_ANTIALIAS = "STRONG"
 EDGE_PS_EXTRA = 0  # Photoshop の境界線 = VWS の縁 + この値（整数でないと保存で消える）
 
 
+# VWS の専用空白（輪郭が無く、送りが全角の 1/4 = 512）⇄ Photoshop の 1/4 em 空白
+BLANK_TO_PS = {0xE73E: "\u2005"}
+BLANK_FROM_PS = {"\u2005": "\ue73e"}
+# Photoshop は、水平比率を掛けた字でもトラッキングには比率を掛けない（別サンプルの組み幅で確認: 掛けると 1 行目が 5px 狭くなった）
+TRACKING_SCALES = False
+
+
 def ps_size_of(size, cell_ratio):
     """VWS の文字サイズ（セル高）→ Photoshop の文字サイズ（em）"""
     return size if abs(cell_ratio - 1) < UNIT_RATIO_TOL else size / cell_ratio
@@ -237,7 +246,10 @@ def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font
     sp = ts1.spacings()
     edge_px = (ts1.edge_width() if edge is None else edge) or 0
     chars = [ch for ch in ts1.chars if ch.code]
-    text = "".join("\n" if ch.code in (0x0A, 0x0D) else ch.char for ch in chars)
+    # VWS の専用空白 U+E73E（全角の 1/4 送り）は、Photoshop では 1/4 em の空白 U+2005 にする（PSD → TS1 で戻す）
+    text = "".join("\n" if ch.code in (0x0A, 0x0D) else BLANK_TO_PS.get(ch.code, ch.char) for ch in chars)
+    mg = ts1.magnifications()
+    n_lines = text.count("\n") + 1
     return {
         "name": name,
         "text": text,
@@ -246,10 +258,16 @@ def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font
         "ps_size": round(ps_size, 3),
         "line_spacing": ts1.line_spacing,
         # VWS の ACSP は「その文字の前」→ Photoshop では 1 つ前の文字のトラッキング
-        "tracking": [int(round(sp[i + 1] / ps_size * 1000 + extra)) if i + 1 < len(chars) else 0
-                     for i in range(len(chars))],
+        # 行末の字（改行の前・最後の字）のトラッキングは 0 にする: Photoshop の中央揃えは行末のトラッキングも幅に数えるので、
+        # 残すと行がその半分だけ横へずれる（VWS では改行や終端の前の字間は並びに効かない）
+        "tracking": [int(round((sp[i + 1] / ps_size * 1000 + extra) / (mg[i][0] / 100 if TRACKING_SCALES else 1)))
+                     if (i + 1 < len(chars) and text[i] != "\n" and text[i + 1] != "\n") else 0 for i in range(len(chars))],
+        "hscale": [round(mg[i][0], 3) for i in range(len(chars))],
+        "vscale": [round(mg[i][1], 3) for i in range(len(chars))],
+        # Photoshop のアンカーは 1 行目のベースライン、VWS の y は最終行のベースライン
         "anchor": [ts1.pos[0] + ts1.box[0] / 2 + VWS_RASTER_OFFSET[0],
-                   round(ts1.pos[1] + baseline_shift(size, font_fit) + VWS_RASTER_OFFSET[1], 3)],
+                   round(ts1.pos[1] - (n_lines - 1) * (size + ts1.line_spacing)
+                         + baseline_shift(size, font_fit) + VWS_RASTER_OFFSET[1], 3)],
         "fill": list(face[:3]),
         "edge_color": list(edgec[:3]),
         "edge_opacity": round(edgec[3] / 255 * 100, 1),
@@ -354,6 +372,8 @@ def read_psd_text(path, layer_name=None):
     first = per_char[0] if per_char else {}
     size = float(get(first, "FontSize", 100)) * float(yy)
     tracking = [float(get(ssd, "Tracking", 0)) for ssd in per_char[:len(text)]]
+    hscale = [float(get(ssd, "HorizontalScale", 1.0) or 1.0) * 100 for ssd in per_char[:len(text)]]
+    vscale = [float(get(ssd, "VerticalScale", 1.0) or 1.0) * 100 for ssd in per_char[:len(text)]]
     fill = _color(get(first, "FillColor", None)) or (255, 255, 255, 255)
     font_name = getattr(fonts[int(get(first, "Font", 0))], "value", None) if fonts else None
     just = 0
@@ -375,12 +395,15 @@ def read_psd_text(path, layer_name=None):
         td = L.tagged_blocks.get_data(Tag.TYPE_TOOL_OBJECT_SETTING)
         b = td.text_data[b"bounds"]
         laid = (float(b[b"Rght"]) - float(b[b"Left"])) * float(xx)
+        import unicodedata
+        plain = all(ch == "\n" or unicodedata.east_asian_width(ch) in ("W", "F") for ch in text) \
+            and all(abs(h - 100) < 0.01 for h in hscale)
         expect, k = 0.0, 0
         for line in text.split("\n"):
             w = sum(size + tracking[k + j] / 1000 * size for j in range(len(line) - 1)) + (size if line else 0)
             expect = max(expect, w)
             k += len(line) + 1
-        if expect - laid > 2:
+        if plain and expect - laid > 2:      # 半角や倍率つきの字があるときは「全角送り」で比べられないので見ない
             warnings.append(f"文字が計算より {expect - laid:.1f}px 詰まっています（組み幅 {laid:.1f}px / 全角送り+トラッキング {expect:.1f}px）。"
                             "カーニング（メトリクス/オプティカル）か文字ツメが効いています。VWS では再現できないので、"
                             "Photoshop の文字パネルでカーニングを「0」、ツメを 0% にしてください")
@@ -388,16 +411,14 @@ def read_psd_text(path, layer_name=None):
         pass
     if any(float(get(ssd, "Tsume", 0) or 0) for ssd in per_char[:len(text)]):
         warnings.append("文字ツメ（Tsume）が設定されています。VWS では再現できません")
-    if any(abs(float(get(ssd, k, 1.0)) - 1.0) > 1e-3 for ssd in per_char[:len(text)]
-           for k in ("HorizontalScale", "VerticalScale")):
-        warnings.append("垂直比率・水平比率（長体/平体）が 100% ではありません。今の変換では反映されません")
-
     return {
         "layer": L.name,
         "text": str(text),
         "font": font_name,
         "size": size,
         "tracking": tracking,
+        "hscale": hscale,
+        "vscale": vscale,
         "justification": {0: "left", 1: "right", 2: "center"}.get(just, "left"),
         "anchor": (float(tx), float(ty)),
         "fill": fill,
@@ -415,6 +436,8 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     glyph_font = 新しい字形を作る元（gdiglyph.GdiGlyphSource など）。無ければ font_path のフォントファイルから作る"""
     info = read_psd_text(psd_path, layer_name)
     text = info["text"]
+    if any(g.code == 0xE73E for g in template.glyphs):     # 雛形が専用空白を使っているときだけ、1/4 em 空白を専用空白に戻す
+        text = "".join(BLANK_FROM_PS.get(ch, ch) for ch in text)
     font = FontGlyphSource(font_path, font_index, fit=font_fit) if font_path else None
     ratio = font.cell_ratio if font else 1.0
     font = glyph_font or font
@@ -422,20 +445,32 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     size = round(vws_size_of(ps_size, ratio), 3)  # Photoshop の em → VWS のセル高（ts1_spec の逆）
     n = len(text)
     tr = (info["tracking"] + [0] * n)[:n]
+    hs = (info.get("hscale", []) + [100.0] * n)[:n]
+    vs = (info.get("vscale", []) + [100.0] * n)[:n]
+    mags = [(round(h, 3), round(v, 3)) for h, v in zip(hs, vs)]
     # Photoshop のトラッキングは「その文字の後ろ」、VWS の ACSP は「その文字の前」に効く
     # → VWS の i 文字目 = Photoshop の i-1 文字目のトラッキング（改行の直後は 0）
     #    さらに全角送りの差 (VWS はセル幅 size、Photoshop は em = ps_size) を差し引く
     def snap(v):  # Photoshop のトラッキングは整数なので、0.1px 未満の端数は丸める
         return float(round(v)) if abs(v - round(v)) < 0.1 else round(v, 3)
-    after = [snap(t / 1000 * ps_size - (size - ps_size)) for t in tr]
-    spacing = [0.0] + [0.0 if text[i - 1] == "\n" else after[i - 1] for i in range(1, n)] + [0.0]
+    after = [snap(t / 1000 * ps_size * (hs[i] / 100 if TRACKING_SCALES else 1) - (size - ps_size)) for i, t in enumerate(tr)]
+    # 改行と行頭の字間は並びに効かない。VWS のファイルでは「基準の字間」（先頭文字と同じ値）が入っているので、それに合わせる
+    base_sp = (template.chars[0].spacing() if template.chars else None) or 0.0
+    spacing = [0.0] + [base_sp if (text[i - 1] == "\n" or text[i] == "\n") else after[i - 1] for i in range(1, n)] + [0.0]
+    uniform = all(m == mags[0] for m in mags) if mags else True
+    tm = template.magnifications()[0] if template.chars else (100.0, 100.0)
     chars, glyphs = build_text(template, text, font=font, spacing=spacing,
-                               size=(size, size), font_id=font_id, prefer_template=prefer_template)
-    # 位置: Photoshop のアンカー（ベースライン）→ VWS の枠（中央揃え）
+                               size=(size, size), font_id=font_id, prefer_template=prefer_template,
+                               mags=None if (uniform and (not mags or mags[0] == tm)) else mags)
+    # 位置: Photoshop のアンカー（1 行目のベースライン）→ VWS の枠（中央揃え）と最終行のベースライン
+    by_code = {g.code: g for g in glyphs}
     lines = text.split("\n")
     widths, k = [], 0
     for line in lines:
-        w = len(line) * size + sum(spacing[k + 1:k + len(line)]) if line else 0
+        w = 0.0
+        for j, ch in enumerate(line):
+            g = by_code.get(ord(ch))
+            w += (g.advance_units() if g else CELL) / CELL * size * hs[k + j] / 100 + (spacing[k + j] if j else 0.0)
         widths.append(w)
         k += len(line) + 1
     w0 = widths[-1]
@@ -447,8 +482,10 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     ay -= baseline_shift(size, font_fit)
     pos = (left + w0 / 2 - box_w / 2, ay + (len(lines) - 1) * (size + template.line_spacing))
 
-    # 境界線が無ければテンプレートの縁を維持。ts1_spec で足した EDGE_PS_EXTRA を引いて VWS の整数の縁幅に戻す
+    # 境界線が無ければテンプレートの縁を維持。太さが雛形の縁（太さ + 追加分）と同じなら触らない
     edge = max(1, int(round(info["edge"] - EDGE_PS_EXTRA))) if info["edge"] else None
+    if edge is not None and edge == (template.edge_width() or 0):
+        edge = None
     out = template.rebuild(chars=chars, glyphs=glyphs, pos=pos,
                            face_color=info["fill"], edge_color=info["edge_color"],
                            clear_history=clear_history, edge_width=edge, color_order=color_order)
