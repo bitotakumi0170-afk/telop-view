@@ -492,10 +492,17 @@ def to_ps(cfg, path):
                 pass
     ts1_to_png(t, base + "_再現.png")
     ts1_to_psd(t, base + "_画像レイヤ.psd")
+    from psdbridge import texture_images
+    tex = []
+    for i, k, lname, im in texture_images(t):
+        png = f"{name}_模様{i}_面{k}.png"
+        im.save(os.path.join(os.path.dirname(base) or ".", png))
+        tex.append((png, lname))
     ts1_to_jsx(t, base + "_Photoshop用.jsx", name=name, ps_font=ps_font,
                font_hints=hints, cell_ratio=ratio, font_fit=fit,
-               ref_png=name + "_再現.png")
-    print(f"  → {name}_再現.png / {name}_画像レイヤ.psd / {name}_Photoshop用.jsx")
+               ref_png=name + "_再現.png", textures=tex)
+    print(f"  → {name}_再現.png / {name}_画像レイヤ.psd / {name}_Photoshop用.jsx"
+          + (f" / 模様 {len(tex)} 枚（PSD の「模様」グループに入ります。編集すると .ts1 に戻ります）" if tex else ""))
 
 
 def to_ts1(cfg, path):

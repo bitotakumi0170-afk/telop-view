@@ -790,13 +790,7 @@ class TS1:
         for g in glyphs:
             ormp += g.encode(keep_header=keep_glyph_header)
         # 色: ADCO の参照先（旧番号）ごとに差し替え
-        new_color = {}
-        for d in self.decorations():
-            if not d["enabled"]:      # 無効にしてある装飾（使っていない文字面など）の色は変えない
-                continue
-            want = face_color if d["role"] == "face" else (edge_color if d["role"] == "edge" else None)
-            if want is not None:
-                new_color[d["color_resource"]] = encode_color(want, color_order)
+        new_color = self.color_targets(face_color, edge_color, color_order)
         for j, (t, raw) in enumerate(others):
             res_old = old_ng + j
             if t == "CRGB" and res_old in new_color:
@@ -881,6 +875,25 @@ class TS1:
         c = self.off["CSML"]
         csml = b[c:self.csml_end]
         return bytes(self._assemble(omr0, ormp_chunk, csml))
+
+    def color_targets(self, face_color=None, edge_color=None, order=COLOR_ORDER):
+        """色の差し替え先 → {ORMP の添字: 新しい色のバイト列}。
+        文字面は「不透明度 100% の単色の文字面」のうち最初の 1 つ、縁は「不透明度 100% の単色で太さのある縁」のうち最初の 1 つだけ。
+        色が今と同じなら差し替えない（縁が何重もあるテロップで、全部の縁が同じ色になるのを防ぐ）"""
+        out = {}
+        for want, role in ((face_color, "face"), (edge_color, "edge")):
+            if want is None:
+                continue
+            for d in self.decorations(order):
+                if d["role"] != role or d["resource_type"] != "CRGB" or d["opacity256"] < 256:
+                    continue
+                if role == "edge" and d["width_px"] <= 0:
+                    continue
+                if d["color"] and tuple(d["color"][:3]) == tuple(want[:3]) and (len(want) < 4 or d["color"][3] == want[3]):
+                    break
+                out[d["color_resource"]] = encode_color(want, order)
+                break
+        return out
 
     def is_plain(self):
         """文字面 + 縁（+ 影）だけの、描画範囲の式が分かっている装飾か（字詰め AFIN = 1 や、光彩・立体などが無い）"""
@@ -970,12 +983,7 @@ class TS1:
                 for i in free:
                     res[i] = ("ORSC", b"ORSC" + struct.pack("<IHI", 14, 1, 0))
                 chars = [Char(ch.code, new_index[ch.glyph_index], ch.attrs, ch.attr_order, ch.pre_raw, ch.uscu) for ch in chars]
-        new_color = {}
-        if face_color is not None or edge_color is not None:
-            for d in self.decorations():
-                want = face_color if d["role"] == "face" else (edge_color if d["role"] == "edge" else None)
-                if want is not None and d["resource_type"] == "CRGB" and d["opacity256"] >= 256:
-                    new_color[d["color_resource"]] = encode_color(want, color_order)
+        new_color = self.color_targets(face_color, edge_color, color_order)
         ormp = bytearray()
         for i, (t, r) in enumerate(res):
             if t == "RCHR":

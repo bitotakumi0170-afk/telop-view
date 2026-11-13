@@ -26,6 +26,77 @@ def ts1_to_png(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     return out_path
 
 
+TEXTURE_GROUP = "模様（VWS の文字面に貼る画像。編集すると .ts1 に戻ります）"
+
+
+def texture_layer_name(index, plane):
+    return f"模様 {index} 面 {plane}"
+
+
+def texture_images(ts1: TS1):
+    """模様の画像 → [(リソースの添字, 面, レイヤ名, RGB の PIL 画像)]。R = G = B = .ts1 の中の値 0〜255"""
+    import wpf
+    from PIL import Image
+    out = []
+    for i, tag, tx in wpf.textures_of(ts1):
+        for k, pl in enumerate(tx.planes()):
+            out.append((i, k, texture_layer_name(i, k), Image.fromarray(pl, "L").convert("RGB")))
+    return out
+
+
+def read_texture_layers(psd_path):
+    """PSD の「模様 i 面 k」レイヤ → {(i, k): uint8 の配列（レイヤの左上から幅 × 高さ。キャンバスの外は 0）}"""
+    import re
+    import numpy as np
+    from psd_tools import PSDImage
+    psd = PSDImage.open(psd_path)
+    out = {}
+    for layer in psd.descendants():
+        m = re.fullmatch(r"模様 (\d+) 面 (\d+)", layer.name or "")
+        if not m or layer.kind not in ("pixel", "shape", "smartobject"):
+            continue
+        im = layer.topil()
+        if im is None:
+            continue
+        a = np.asarray(im.convert("RGB"), np.uint8)[..., 0]
+        out[(int(m.group(1)), int(m.group(2)))] = (layer.left, layer.top, a)
+    return out
+
+
+def apply_texture_layers(out_bytes, template: TS1, layers):
+    """psd_to_ts1 の結果に、PSD の模様レイヤを書き戻す。模様の番号は雛形の番号（何番目の模様か、で対応させる）"""
+    import numpy as np
+    import wpf
+    if not layers:
+        return out_bytes, 0
+    t = TS1(out_bytes)
+    src = wpf.textures_of(template)
+    dst = wpf.textures_of(t)
+    res = list(t.resources)
+    changed = 0
+    for (si, _, stx), (di, tag, dtx) in zip(src, dst):
+        planes = dtx.planes()
+        new = list(planes)
+        for k in range(len(planes)):
+            if (si, k) not in layers:
+                continue
+            left, top, a = layers[(si, k)]
+            full = np.zeros((dtx.height, dtx.width), np.uint8)
+            h, w = a.shape
+            x0, y0 = max(left, 0), max(top, 0)
+            x1, y1 = min(left + w, dtx.width), min(top + h, dtx.height)
+            if x1 > x0 and y1 > y0:
+                full[y0:y1, x0:x1] = a[y0 - top:y1 - top, x0 - left:x1 - left]
+            if not np.array_equal(full, planes[k]):
+                new[k] = full
+                changed += 1
+        if any(n is not o for n, o in zip(new, planes)):
+            res[di] = (tag, dtx.replaced(new))
+    if not changed:
+        return out_bytes, 0
+    return t.rebuild_resources(res), changed
+
+
 def ts1_to_psd(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     from psd_tools import PSDImage
     import vwsrender
@@ -36,6 +107,17 @@ def ts1_to_psd(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     g = psd.create_group([e, f], name="TS1")
     # 日本語名は Unicode レイヤ名ブロックに入る（setter 経由）
     e.name, f.name, g.name = "縁", "文字", f"TS1: {ts1.text}"[:120]
+    tex = texture_images(ts1)
+    if tex:
+        layers = []
+        for i, k, name, im in tex:
+            ly = psd.create_pixel_layer(im.convert("RGBA"), name="tex", top=0, left=0)
+            ly.name = name
+            ly.visible = False
+            layers.append(ly)
+        tg = psd.create_group(layers, name="textures")
+        tg.name = TEXTURE_GROUP
+        tg.visible = False
     psd.save(out_path)
     return out_path
 
@@ -183,6 +265,24 @@ var EXACT = false;
   EXACT = true;
 })();
 
+// ---- 模様（VWS の文字面に貼る画像）を隠したレイヤで入れておく。PSD → TS1 でこのレイヤを読み戻す
+(function(){
+  if (!SPEC.textures || !SPEC.textures.length) return;
+  var set = doc.layerSets.add();
+  set.name = SPEC.texture_group;
+  for (var i = 0; i < SPEC.textures.length; i++) {
+    var f = new File(here + "/" + SPEC.textures[i].png);
+    if (!f.exists) continue;
+    var pd = app.open(f);
+    var dup = pd.activeLayer.duplicate(set, ElementPlacement.INSIDE);
+    pd.close(SaveOptions.DONOTSAVECHANGES);
+    app.activeDocument = doc;
+    dup.name = SPEC.textures[i].name;
+    dup.visible = false;
+  }
+  set.visible = false;
+})();
+
 app.preferences.rulerUnits = oldRuler; app.preferences.typeUnits = oldType;
 var out = new File(here + "/" + SPEC.name + ".psd");
 var opt = new PhotoshopSaveOptions(); opt.layers = true;
@@ -231,7 +331,7 @@ def vws_size_of(ps_size, cell_ratio):
 
 
 def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font=None,
-             font_hints=(), cell_ratio=1.0, ref_png="", font_fit=None):
+             font_hints=(), cell_ratio=1.0, ref_png="", font_fit=None, textures=()):
     """Photoshop 再現用のパラメータ
 
     cell_ratio = (winAscent + winDescent) / unitsPerEm（フォントファイルから。不明なら 1）
@@ -278,6 +378,8 @@ def ts1_spec(ts1: TS1, name="telop", color_order=COLOR_ORDER, edge=None, ps_font
         "ps_font": ps_font or "",
         "font_hints": [list(h) for h in font_hints],
         "ref_png": ref_png,
+        "textures": [{"png": png, "name": name} for png, name in textures],
+        "texture_group": TEXTURE_GROUP,
     }
 
 
@@ -491,4 +593,8 @@ def psd_to_ts1(psd_path, template: TS1, font_path=None, font_index=0, layer_name
     out = template.rebuild(chars=chars, glyphs=glyphs, pos=pos,
                            face_color=info["fill"], edge_color=info["edge_color"],
                            clear_history=clear_history, edge_width=edge, color_order=color_order)
+    # 模様のレイヤ（「模様 i 面 k」）があれば、その画像で .ts1 の模様を書き戻す（変わっていなければ元のバイト列のまま）
+    out, n_tex = apply_texture_layers(out, template, read_texture_layers(psd_path))
+    if n_tex:
+        info.setdefault("warnings", []).append(f"模様の画像 {n_tex} 枚を PSD のレイヤから書き戻しました")
     return out, info
