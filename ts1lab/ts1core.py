@@ -558,6 +558,7 @@ class TS1:
             raise ValueError(f"0x{p:x}: 文字の要素（CSML / CSSL）がありません: {[el[0] for el in self.elements]}")
         c = texts[0][1]
         c_end = c + texts[0][2]
+        self.csml_end = c_end
         ctag, _ = chunk_at(b, c)
         self.kind = ctag.decode()      # CSML = 文字枠つき（複数行） / CSSL = 1 行もの（枠なし）
         self.off["CSML"] = c
@@ -752,9 +753,7 @@ class TS1:
         pos = (枠の左, ベースライン)。1 行もの（CSSL）では「元の行の幅のまま左をここに置いたときの中心」を保って、
         新しい文言の幅に合わせて左位置と行の幅を書き直す"""
         b = self.data
-        if len(self.elements) != 1 or not self.glyphs_in_order():
-            raise NotImplementedError("このファイルは書き出しにまだ対応していません（図形や 2 つめの文字が入っている、"
-                                      "または字ごとに装飾が違う）。読み取りと表示はできます")
+        keep_slots = not self.glyphs_in_order()     # グリフの間に色が挟まるファイル: リソースの番号を動かさない
         args = dict(chars=chars, glyphs=glyphs, face_color=face_color, edge_color=edge_color, clear_history=clear_history,
                     keep_glyph_header=keep_glyph_header, edge_width=edge_width, color_order=color_order)
         pos_in = pos
@@ -764,6 +763,9 @@ class TS1:
         old_ng = len(self.glyphs)
         others = [(t, r) for t, r in self.resources if t != "RCHR"]
         shift = len(glyphs) - old_ng  # 色リソース番号のずれ
+        if keep_slots:
+            return self._rebuild_keep_slots(chars, glyphs, pos, pos_in, changed, args, clear_history, keep_glyph_header,
+                                            face_color, edge_color, edge_width, color_order, _line_w)
 
         # ---- ORMP
         ormp = bytearray()
@@ -828,8 +830,15 @@ class TS1:
         csml_body = bytes(csml_head[8:]) + eset + bytes(mchr)
         csml = self.kind.encode() + struct.pack("<I", 8 + len(csml_body)) + csml_body
 
+        out = self._assemble(omr0, ormp_chunk, csml)
+        return self._finish_rebuild(out, changed, args, pos_in, edge_width, _line_w)
+
+    def _assemble(self, omr0, ormp_chunk, csml):
+        """OMR0・ORMP・主の文字要素を差し替えて、ファイル全体を組み直す（長さの欄を全部書き直す）"""
+        b = self.data
+        om, o, c = self.off["OMR0"], self.off["ORMP"], self.off["CSML"]
         s = self.off["SLYR"]
-        slyr_body = b[s + 8:c] + csml
+        slyr_body = b[s + 8:c] + csml + b[self.csml_end:]       # 主の要素のうしろ（図形・2 つめの文字）はそのまま
         slyr = b"SLYR" + struct.pack("<I", 8 + len(slyr_body)) + slyr_body
 
         # ---- SWRK
@@ -839,10 +848,22 @@ class TS1:
         swrk_body = mid + slyr
         swrk = b"SWRK" + struct.pack("<I", 8 + len(swrk_body)) + swrk_body
         tsrc_body = b[8:sw] + swrk
-        out = bytearray(b"TSRC" + struct.pack("<I", 8 + len(tsrc_body)) + tsrc_body)
+        return bytearray(b"TSRC" + struct.pack("<I", 8 + len(tsrc_body)) + tsrc_body)
 
+    def is_plain(self):
+        """文字面 + 縁（+ 影）だけの、描画範囲の式が分かっている装飾か（字詰め AFIN = 1 や、光彩・立体などが無い）"""
+        afin = self.base_attr("AFIN")
+        if afin is not None and u32(afin, 2):
+            return False
+        return len(self.elements) == 1 and all(d["kind"] in (0, 9, 1) and d["resource_type"] == "CRGB"
+                                               for ds in self.decorations_per_char() for d in ds)
+
+    def _finish_rebuild(self, out, changed, args, pos_in, edge_width, _line_w):
+        afin = self.base_attr("AFIN")
+        tsume = afin is not None and bool(u32(afin, 2))
         # ---- 1 行もの: 文言が変わったら行の幅と左位置を書き直す（中心は動かさない）
-        if self.kind == "CSSL" and _line_w is None and changed:
+        #      字詰め（AFIN = 1）のファイルは字送りの式がまだ分からないので、行の幅と位置は元のまま残す
+        if self.kind == "CSSL" and _line_w is None and changed and not tsume:
             tmp = TS1(bytes(out))
             w = tmp.line_width()
             if abs(w - self.box[0]) > 1e-6:
@@ -853,9 +874,19 @@ class TS1:
         if changed:
             tmp = TS1(bytes(out))
             bb = None
-            try:    # VWS と同じ式で範囲を出す（VWS が保存した 3 種類のファイルの OFRI と 4 辺とも一致）
+            try:
                 import vwsrender
-                bb = vwsrender.drawn_bbox(tmp)
+                if self.is_plain():
+                    # VWS と同じ式で範囲を出す（VWS が保存した 3 種類のファイルの OFRI と 4 辺とも一致）
+                    bb = vwsrender.drawn_bbox(tmp)
+                elif len(self.elements) == 1:
+                    # 光彩・立体などの広がりは式が未解明。元のファイルの「字形の範囲 → OFRI」の余白をそのまま新しい字形の範囲に付ける
+                    old_r, new_r = vwsrender.real_bbox(self), vwsrender.real_bbox(tmp)
+                    if old_r and new_r:
+                        old_o = [i32(self.data, self.ofri_bbox_off + 4 * k) / FIX for k in range(4)]
+                        bb = tuple(new_r[k] + (old_o[k] - old_r[k]) for k in range(4))
+                else:
+                    return bytes(out)      # 要素が複数: OFRI は全部の要素の範囲なので触らない（VWS は開いたときに計算し直す）
             except Exception:
                 bb = None
             if bb is None:
@@ -863,6 +894,101 @@ class TS1:
             if bb:
                 struct.pack_into("<iiii", out, self.ofri_bbox_off, *(fx(round(v)) for v in bb))
         return bytes(out)
+
+    def _rebuild_keep_slots(self, chars, glyphs, pos, pos_in, changed, args, clear_history, keep_glyph_header,
+                            face_color, edge_color, edge_width, color_order, _line_w):
+        """リソースの番号を動かさない組み直し。chars の glyph_index は「glyphs の中の何番目か」ではなく、
+        ここで決める ORMP の添字に付け替える（呼び出し側は glyphs の並びの番号、または元の ORMP の添字のどちらでもよい:
+        chars / glyphs を渡さなかったときは元のまま）"""
+        b = self.data
+        res = list(self.resources)
+        if args["glyphs"] is not None or args["chars"] is not None:
+            # 新しいグリフ → 同じ字（文字コードとフォント）が元にあればその位置のまま。無い字は、この文字要素だけが使っていて
+            # 要らなくなった位置へ入れ、足りなければ末尾へ足す。余った位置は空き枠（ORSC）にする。
+            # ほかの要素（2 つめの文字など）が使っているグリフの位置には触らない
+            same = args["glyphs"] is None                 # グリフは元のまま（chars の番号は ORMP の添字）
+            if not same:
+                import re as _re
+                mine = sorted({ch.glyph_index for ch in self.chars})
+                protected = set()
+                for t_, o_, s_ in self.elements:
+                    if o_ == self.off["CSML"]:
+                        continue
+                    for m in _re.finditer(b"MCHR", b[o_:o_ + s_]):
+                        q = o_ + m.start()
+                        if 30 <= u32(b, q + 4) <= s_ and u16(b, q + 8) == 1:
+                            protected.add(u16(b, q + 10))
+                by_code = {(res[i][1].code, res[i][1].font_id): i for i in mine}
+                new_index, claimed = {}, set()
+                for k, g in enumerate(glyphs):
+                    i = by_code.get((g.code, g.font_id))
+                    if i is not None and i not in claimed:
+                        new_index[k] = i; claimed.add(i)
+                        if i not in protected:
+                            res[i] = ("RCHR", g)
+                free = [i for i in mine if i not in claimed and i not in protected]
+                for k, g in enumerate(glyphs):
+                    if k in new_index:
+                        continue
+                    if free:
+                        i = free.pop(0); res[i] = ("RCHR", g)
+                    else:
+                        res.append(("RCHR", g)); i = len(res) - 1
+                    new_index[k] = i
+                for i in free:
+                    res[i] = ("ORSC", b"ORSC" + struct.pack("<IHI", 14, 1, 0))
+                chars = [Char(ch.code, new_index[ch.glyph_index], ch.attrs, ch.attr_order, ch.pre_raw, ch.uscu) for ch in chars]
+        new_color = {}
+        if face_color is not None or edge_color is not None:
+            for d in self.decorations():
+                want = face_color if d["role"] == "face" else (edge_color if d["role"] == "edge" else None)
+                if want is not None and d["resource_type"] == "CRGB" and d["opacity256"] >= 256:
+                    new_color[d["color_resource"]] = encode_color(want, color_order)
+        ormp = bytearray()
+        for i, (t, r) in enumerate(res):
+            if t == "RCHR":
+                ormp += r.encode(keep_header=keep_glyph_header)
+            elif t == "CRGB" and i in new_color:
+                ormp += r[:14] + new_color[i]
+            else:
+                ormp += r
+        ormp_chunk = b"ORMP" + struct.pack("<I", 12 + len(ormp)) + self.ormp_head + struct.pack("<H", len(res)) + ormp
+
+        om = self.off["OMR0"]
+        omr0 = b[om:om + u32(b, om + 4)]
+        if clear_history:
+            body = omr0[8:12] + struct.pack("<H", 0)
+            omr0 = b"OMR0" + struct.pack("<I", 8 + len(body)) + body
+
+        c = self.off["CSML"]
+        e = self.off["ESET_chars"]
+        csml_head = bytearray(b[c:e])
+        if _line_w is not None:
+            struct.pack_into("<i", csml_head, self.off["CSTR"] - c + 14, fx(_line_w))
+        if pos is not None:
+            dx, dy = pos[0] - self.pos[0], pos[1] - self.pos[1]
+            struct.pack_into("<ii", csml_head, 10, fx(pos[0]), fx(pos[1]))
+            for xo in self.xtrs:
+                r = xo - c
+                if csml_head[r + 32] == 2:
+                    for k in (34, 38, 46, 50):
+                        v = i32(csml_head, r + k)
+                        struct.pack_into("<i", csml_head, r + k, v + fx(dx if k in (34, 46) else dy))
+        mchr = bytearray()
+        for ch in chars:
+            if "ADCO" in ch.attrs and edge_width is not None:
+                a = bytearray(ch.attrs["ADCO"])
+                for d in self._decode_adco(ch.attrs["ADCO"]):
+                    if d["role"] == "edge" and d["opacity256"] >= 256 and d["width_px"] > 0:
+                        struct.pack_into("<ii", a, d["offset"] + 34, int(round(edge_width)), int(round(edge_width)))
+                        break
+                ch = Char(ch.code, ch.glyph_index, {**ch.attrs, "ADCO": bytes(a)}, ch.attr_order, ch.pre_raw, ch.uscu)
+            mchr += ch.encode()
+        eset = b"ESET" + b"\x00" * 4 + struct.pack("<H", len(chars))
+        csml_body = bytes(csml_head[8:]) + eset + bytes(mchr)
+        csml = self.kind.encode() + struct.pack("<I", 8 + len(csml_body)) + csml_body
+        out = self._assemble(omr0, ormp_chunk, csml)
+        return self._finish_rebuild(out, changed, args, pos_in, edge_width, _line_w)
 
     def ink_bbox(self, edge=7):
         xs0, ys0, xs1, ys1 = [], [], [], []
@@ -979,8 +1105,13 @@ class FontGlyphSource:
 
 
 def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
-               spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False, mags=None):
+               spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False, mags=None,
+               keep_style=None):
     """テンプレートの書式で text を組み直し、(chars, glyphs) を返す。
+
+    - keep_style: True なら、字ごとの書式（装飾の切り替え・倍率・字間・縦ずらし）を「何字目か」でそのまま引き継ぐ
+      （i 字目は雛形の i 字目の属性を写す。雛形より長いぶんは直前の字の書式が続く）。同じ文言なら元とバイト単位で同じになる。
+      None（既定）は、装飾つきの雛形（光彩・立体・グラデーション・模様・字ごとの装飾）のときだけ True
 
     - mags: 文字ごとの倍率 [(横 %, 縦 %), ...]（None なら全部テンプレート先頭文字の値）。変わる所にだけ ACMG を書く
 
@@ -1048,6 +1179,51 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
 
     prev_mag = mag_of(first)
     chars = []
+    if keep_style is None:
+        keep_style = not template.is_plain()
+    if keep_style:
+        tmpl_chars = [ch for ch in template.chars if ch.code != 0]
+        cur_sp, cur_mg = 0.0, (100.0, 100.0)          # いま作っている並びで、その字に効く字間・倍率
+        t_sp, t_mg = template.spacings(), template.magnifications()
+        for i, c in enumerate(codes):
+            if c == 0:
+                if last is not None:
+                    chars.append(Char(0, 0, dict(last.attrs), list(last.attr_order), last.pre_raw, first.uscu))
+                else:
+                    chars.append(Char(0, 0, uscu=first.uscu))
+                continue
+            if i < len(tmpl_chars):
+                src = tmpl_chars[i]
+                attrs, order_t, pre = dict(src.attrs), list(src.attr_order), src.pre_raw
+                want_sp, want_mg = t_sp[i], t_mg[i]
+            else:
+                attrs, order_t, pre = {}, [], (tmpl_chars[-1].pre_raw if tmpl_chars else b"\x00" * 22)
+                want_sp, want_mg = cur_sp, cur_mg
+            if spacing is not None and i < len(spacing):
+                want_sp = float(spacing[i])
+            if mags is not None and i < len(mags):
+                want_mg = (float(mags[i][0]), float(mags[i][1]))
+            if "ACSP" in attrs:
+                cur_sp = i32(attrs["ACSP"], 2) / FIX
+            if "ACMG" in attrs:
+                cur_mg = (i32(attrs["ACMG"], 2) / FIX, i32(attrs["ACMG"], 6) / FIX)
+            if want_sp != cur_sp:
+                if "ACSP" not in attrs:
+                    order_t.append("ACSP")
+                attrs["ACSP"] = struct.pack("<Hi", 1, fx(want_sp))
+                cur_sp = want_sp
+            if want_mg != cur_mg:
+                if "ACMG" not in attrs:
+                    order_t.append("ACMG")
+                attrs["ACMG"] = struct.pack("<Hii", 1, fx(want_mg[0]), fx(want_mg[1]))
+                cur_mg = want_mg
+            if i == 0:
+                if size is not None and "ACSZ" in attrs:
+                    attrs["ACSZ"] = struct.pack("<Hii", 1, fx(size[0]), fx(size[1]))
+                if font_id is not None and "ACTP" in attrs:
+                    attrs["ACTP"] = struct.pack("<HI", 1, font_id)
+            chars.append(Char(c, index.get(c, 0), attrs, order_t, pre, first.uscu))
+        return chars, glyphs
     for i, c in enumerate(codes):
         extra, extra_order = {}, []
         if mags is not None and i < len(mags) and c != 0:
