@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>口パク立ち絵デモ</title>
+<style>
+:root{--text:#2b2440;--muted:#6b6385;--accent:#7c5cff;--panel:rgba(255,255,255,.88);--line:#d9d3ef}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:system-ui,"Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif;color:var(--text);
+  background:linear-gradient(160deg,#fdf2f8,#e0e7ff);display:flex;flex-direction:column;overflow:hidden}
+body.obs{background:transparent}
+body.obs #panel,body.obs #deco{display:none}
+#stage{flex:1;min-height:0;display:flex;justify-content:center;align-items:flex-end}
+#stage svg{height:100%;max-width:100%;display:block}
+#panel{background:var(--panel);border-top:1px solid var(--line);padding:12px 16px 14px;display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:center;backdrop-filter:blur(8px)}
+button,.filebtn{font:inherit;font-size:14px;border:1px solid var(--line);background:#fff;color:var(--text);border-radius:999px;padding:8px 14px;cursor:pointer}
+button:hover,.filebtn:hover{border-color:var(--accent)}
+button.on,.filebtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.filebtn input{display:none}
+label.ctl{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+#meter{width:90px;height:8px;border-radius:4px;background:#e7e3f5;overflow:hidden}
+#meter i{display:block;height:100%;width:0;background:var(--accent);transition:width .05s}
+#msg{width:100%;text-align:center;font-size:12px;color:var(--muted);margin:0}
+</style>
+</head>
+<body>
+<div id="stage">
+<svg id="svg" viewBox="0 40 600 700" xmlns="http://www.w3.org/2000/svg" aria-label="口パクするキャラクター">
+  <defs>
+    <radialGradient id="irisGrad" cx="50%" cy="65%" r="60%">
+      <stop offset="0" stop-color="#7fe0ee"/>
+      <stop offset=".55" stop-color="#3a9ec0"/>
+      <stop offset="1" stop-color="#1c4d73"/>
+    </radialGradient>
+    <linearGradient id="hairGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a4b94"/>
+      <stop offset="1" stop-color="#43386f"/>
+    </linearGradient>
+    <filter id="hairShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4" flood-color="#8a4f6e" flood-opacity=".32"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="4"/></filter>
+    <clipPath id="mouthClip"><path id="mouthClipPath" d=""/></clipPath>
+  </defs>
+
+  <g id="deco">
+    <circle cx="300" cy="330" r="250" fill="#fff" opacity=".55"/>
+    <circle cx="300" cy="330" r="190" fill="#fff" opacity=".35"/>
+    <path d="M110 170 l6 14 14 6 -14 6 -6 14 -6 -14 -14 -6 14 -6z" fill="#c4b5fd"/>
+    <path d="M492 230 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4z" fill="#f9a8d4"/>
+    <path d="M470 120 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z" fill="#a5b4fc"/>
+  </g>
+
+  <g id="body">
+    <!-- 後ろ髪 -->
+    <g id="hairBackHead"><g id="hairBack">
+      <path d="M190 250 C168 400 158 560 172 650 Q300 684 428 650 C442 560 432 400 410 250 C405 115 195 115 190 250 Z" fill="#362d5e" stroke="#251d45" stroke-width="2"/>
+    </g></g>
+
+    <!-- 首 -->
+    <path d="M278 400 L278 515 L322 515 L322 400 Z" fill="#ffe6d8"/>
+    <ellipse cx="300" cy="448" rx="30" ry="16" fill="#f3c4b1"/>
+
+    <!-- 胴体 -->
+    <g id="torso" transform="translate(0 -52)">
+      <path d="M118 800 C126 640 180 562 300 550 C420 562 474 640 482 800 Z" fill="#2d3557" stroke="#1e2440" stroke-width="2"/>
+      <path d="M256 550 L300 650 L344 550 Z" fill="#fff"/>
+      <path d="M256 550 L283 604 L262 614 L240 558 Z" fill="#f4f4fb" stroke="#c9cbe0" stroke-width="1.5"/>
+      <path d="M344 550 L317 604 L338 614 L360 558 Z" fill="#f4f4fb" stroke="#c9cbe0" stroke-width="1.5"/>
+      <path d="M240 558 L300 700 M360 558 L300 700" stroke="#46507a" stroke-width="3" fill="none"/>
+      <g fill="#e2475f" stroke="#b8324a" stroke-width="1.5" stroke-linejoin="round">
+        <path d="M300 616 L268 598 L271 634 Z"/>
+        <path d="M300 616 L332 598 L329 634 Z"/>
+        <path d="M295 620 L284 664 L298 656 Z"/>
+        <path d="M305 620 L316 664 L302 656 Z"/>
+        <circle cx="300" cy="616" r="8"/>
+      </g>
+    </g>
+
+    <!-- 頭 -->
+    <g id="head">
+      <g id="face">
+        <path d="M212 250 C212 350 250 425 300 446 C350 425 388 350 388 250 C388 175 345 140 300 140 C255 140 212 175 212 250 Z" fill="#ffe6d8" stroke="#d9a593" stroke-width="2"/>
+      </g>
+
+      <g id="features">
+        <ellipse cx="238" cy="350" rx="21" ry="9" fill="#ff8fa3" opacity=".5" filter="url(#soft)"/>
+        <ellipse cx="362" cy="350" rx="21" ry="9" fill="#ff8fa3" opacity=".5" filter="url(#soft)"/>
+        <g id="eyeL"></g>
+        <g id="eyeR"></g>
+        <path d="M298 350 Q301 355 305 351" stroke="#d49a88" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <!-- 口 -->
+        <path id="mouthLine" d="" stroke="#4a1a26" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+        <g id="mouthOpen" style="display:none">
+          <path id="mouthFill" d="" fill="#7a2236"/>
+          <g clip-path="url(#mouthClip)">
+            <rect id="teeth" x="250" y="0" width="100" height="0" fill="#fff"/>
+            <ellipse id="tongue" cx="300" cy="400" rx="10" ry="6" fill="#ef7d8d"/>
+          </g>
+          <path id="mouthStroke" d="" fill="none" stroke="#4a1a26" stroke-width="2.6" stroke-linejoin="round"/>
+        </g>
+      </g>
+
+      <g id="sideL"><path d="M214 205 C196 290 188 390 198 492 C212 452 226 372 236 262 Z" fill="url(#hairGrad)" stroke="#2a2148" stroke-width="2" stroke-linejoin="round"/></g>
+      <g id="sideR"><path d="M386 205 C404 290 412 390 402 492 C388 452 374 372 364 262 Z" fill="url(#hairGrad)" stroke="#2a2148" stroke-width="2" stroke-linejoin="round"/></g>
+
+      <g id="ahoge"><path d="M296 106 C288 62 320 40 348 52 C326 54 310 72 307 106 Z" fill="#4a3f7a" stroke="#2a2148" stroke-width="2" stroke-linejoin="round"/></g>
+
+      <g id="bangs" filter="url(#hairShadow)">
+        <path d="M196 262 C186 150 245 98 300 98 C355 98 414 150 404 262
+                 Q392 228 380 196 Q372 232 354 252
+                 Q350 220 338 190 Q330 228 314 250
+                 Q308 218 300 188 Q292 222 276 252
+                 Q270 220 260 192 Q250 230 234 254
+                 Q228 222 222 198 Q210 232 196 262 Z"
+              fill="url(#hairGrad)" stroke="#2a2148" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M236 150 Q300 120 364 150" stroke="#9b8ee0" stroke-width="7" fill="none" stroke-linecap="round" opacity=".55"/>
+        <path d="M372 160 l6 13 14 2 -10 10 3 14 -13 -7 -13 7 3 -14 -10 -10 14 -2z" fill="#ffd257" stroke="#d9a82e" stroke-width="1.5" stroke-linejoin="round"/>
+      </g>
+
+      <g id="brows" opacity=".9">
+        <path d="M228 258 Q252 246 280 254" stroke="#3d3060" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path d="M372 258 Q348 246 320 254" stroke="#3d3060" stroke-width="4" fill="none" stroke-linecap="round"/>
+      </g>
+    </g>
+  </g>
+</svg>
+</div>
+
+<div id="panel">
+  <button id="bDemo">▶ デモ音声</button>
+  <button id="bMic">🎤 マイク</button>
+  <label class="filebtn" id="bFile">📁 音声ファイル<input id="file" type="file" accept="audio/*,video/*"></label>
+  <button id="bStop">■ 停止</button>
+  <label class="ctl">感度 <input id="sens" type="range" min="30" max="75" value="52"></label>
+  <span id="meter"><i></i></span>
+  <label class="ctl"><input id="obs" type="checkbox"> 背景透過(OBS用)</label>
+  <p id="msg">マウスを動かすと目線が追いかけます。OBSでは URL の末尾に <code>?obs=1&amp;mic=1</code> を付けるとマイク連動・背景透過で表示します。</p>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const P = n => n.toFixed(2);
+
+/* ---------- 目のパーツ生成(右目は左目の鏡像) ---------- */
+function eyeMarkup(id){
+  return `
+  <clipPath id="clip-${id}"><ellipse cx="255" cy="302" rx="27" ry="31"/></clipPath>
+  <g class="open">
+    <ellipse cx="255" cy="302" rx="27" ry="31" fill="#fff"/>
+    <g clip-path="url(#clip-${id})">
+      <g class="iris">
+        <ellipse cx="255" cy="306" rx="20" ry="26" fill="url(#irisGrad)"/>
+        <ellipse cx="255" cy="308" rx="9" ry="12" fill="#14324a"/>
+        <ellipse cx="255" cy="320" rx="13" ry="6" fill="#9be8f2" opacity=".5"/>
+        <circle cx="247" cy="296" r="6.5" fill="#fff"/>
+        <circle cx="263" cy="316" r="3" fill="#fff" opacity=".9"/>
+      </g>
+      <ellipse cx="255" cy="276" rx="34" ry="14" fill="#5a3f6a" opacity=".22"/>
+    </g>
+    <path d="M288 296 Q286 266 255 265 Q226 265 220 288 L213 279 Q220 255 255 255 Q290 255 294 290 Z" fill="#2b2033"/>
+    <path d="M241 334 Q255 338 269 334" stroke="#6b4a5a" stroke-width="2" fill="none" stroke-linecap="round"/>
+  </g>
+  <path class="closed" d="M224 302 Q255 320 288 302" stroke="#2b2033" stroke-width="4.5" fill="none" stroke-linecap="round" style="display:none"/>`;
+}
+$('#eyeL').innerHTML = eyeMarkup('L');
+$('#eyeR').innerHTML = `<g transform="translate(600 0) scale(-1 1)">${eyeMarkup('R')}</g>`;
+const eyes = ['#eyeL', '#eyeR'].map(s => {
+  const el = $(s);
+  return { el, open: el.querySelector('.open'), closed: el.querySelector('.closed'), iris: el.querySelector('.iris') };
+});
+
+const E = id => document.getElementById(id);
+const el = {
+  body: E('body'), head: E('head'), hairBackHead: E('hairBackHead'), hairBack: E('hairBack'),
+  face: E('face'), features: E('features'), brows: E('brows'), sideL: E('sideL'), sideR: E('sideR'),
+  bangs: E('bangs'), ahoge: E('ahoge'),
+  mouthLine: E('mouthLine'), mouthOpen: E('mouthOpen'), mouthFill: E('mouthFill'), mouthStroke: E('mouthStroke'),
+  mouthClip: E('mouthClipPath'), teeth: E('teeth'), tongue: E('tongue'),
+};
+
+/* ---------- 音声入力 ---------- */
+let ctx = null, analyser = null, td, fd, current = null;
+function ensureCtx(){
+  if(!ctx){
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = .3;
+    td = new Float32Array(analyser.fftSize);
+    fd = new Uint8Array(analyser.frequencyBinCount);
+  }
+  if(ctx.state === 'suspended') ctx.resume();
+}
+function setActive(id){
+  ['bDemo', 'bMic', 'bFile'].forEach(b => E(b).classList.toggle('on', b === id));
+}
+function stopAll(){
+  if(current){ const c = current; current = null; c.stop(); }
+  setActive(null);
+}
+function say(t){ $('#msg').textContent = t; }
+
+// デモ: ノコギリ波+フォルマントフィルタで「しゃべり声っぽい」音を合成
+function startDemo(){
+  stopAll(); ensureCtx();
+  const osc = ctx.createOscillator(); osc.type = 'sawtooth';
+  const vib = ctx.createOscillator(); vib.frequency.value = 5.5;
+  const vibG = ctx.createGain(); vibG.gain.value = 6; vib.connect(vibG).connect(osc.frequency);
+  const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 5;
+  const f2 = ctx.createBiquadFilter(); f2.type = 'bandpass'; f2.Q.value = 8;
+  const g2 = ctx.createGain(); g2.gain.value = .7;
+  const env = ctx.createGain(); env.gain.value = 0;
+  const out = ctx.createGain(); out.gain.value = 2.2;
+  osc.connect(f1).connect(env); osc.connect(f2).connect(g2).connect(env);
+  env.connect(out); out.connect(analyser); out.connect(ctx.destination);
+  osc.start(); vib.start();
+  const V = [[800,1250],[320,2300],[340,1400],[500,1900],[480,850]]; // あいうえお
+  let tNext = ctx.currentTime + .1, n = 0, len = 0, base = 290;
+  const timer = setInterval(() => {
+    while(tNext < ctx.currentTime + .35){
+      if(n >= len){ tNext += .3 + Math.random() * .5; n = 0; len = 4 + (Math.random() * 8 | 0); base = 260 + Math.random() * 70; }
+      const v = V[Math.random() * V.length | 0];
+      const dur = .09 + Math.random() * .09;
+      const pitch = base * (1 + .1 * Math.sin(n * 1.3)) * (1 - .15 * n / len);
+      osc.frequency.setValueAtTime(pitch, tNext);
+      f1.frequency.setValueAtTime(v[0], tNext);
+      f2.frequency.setValueAtTime(v[1], tNext);
+      const pk = .5 + Math.random() * .5;
+      env.gain.setValueAtTime(0, tNext);
+      env.gain.linearRampToValueAtTime(pk, tNext + .02);
+      env.gain.setValueAtTime(pk * .85, tNext + dur - .03);
+      env.gain.linearRampToValueAtTime(0, tNext + dur);
+      tNext += dur + .02 + Math.random() * .03; n++;
+    }
+  }, 50);
+  current = { stop(){
+    clearInterval(timer);
+    env.gain.cancelScheduledValues(ctx.currentTime); env.gain.setValueAtTime(0, ctx.currentTime);
+    osc.stop(); vib.stop(); out.disconnect();
+  }};
+  setActive('bDemo');
+}
+
+async function startMic(){
+  stopAll(); ensureCtx();
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const src = ctx.createMediaStreamSource(stream);
+    src.connect(analyser);
+    current = { stop(){ src.disconnect(); stream.getTracks().forEach(t => t.stop()); } };
+    setActive('bMic');
+    say('マイク入力中。口が動きにくいときは「感度」を右へ。');
+  }catch(e){
+    say('マイクを使えませんでした(' + e.name + ')。ブラウザのマイク許可を確認してください。');
+  }
+}
+
+$('#file').addEventListener('change', e => {
+  const f = e.target.files[0]; if(!f) return;
+  stopAll(); ensureCtx();
+  const url = URL.createObjectURL(f);
+  const audio = new Audio(url);
+  const src = ctx.createMediaElementSource(audio);
+  src.connect(analyser); src.connect(ctx.destination);
+  audio.onended = () => { if(current && current.audio === audio) stopAll(); };
+  audio.play();
+  current = { audio, stop(){ audio.pause(); src.disconnect(); URL.revokeObjectURL(url); } };
+  setActive('bFile');
+  e.target.value = '';
+});
+$('#bDemo').onclick = startDemo;
+$('#bMic').onclick = startMic;
+$('#bStop').onclick = stopAll;
+
+const params = new URLSearchParams(location.search);
+const obsBox = $('#obs');
+function setObs(on){ document.body.classList.toggle('obs', on); obsBox.checked = on; }
+obsBox.onchange = () => setObs(obsBox.checked);
+if(params.get('obs') === '1') setObs(true);
+if(params.get('mic') === '1') startMic();
+if(params.get('demo') === '1') startDemo();
+
+/* ---------- 音声解析: 音量 → 口の開き、高域/低域の比 → 口の形 ---------- */
+const st = { level: 0, bright: .5, open: 0, width: 28, nextBlink: 1.5, blinkT: -1, doubleBlink: false };
+function bandAvg(lo, hi){
+  const hz = ctx.sampleRate / analyser.fftSize;
+  let s = 0, c = 0;
+  for(let i = Math.floor(lo / hz); i <= Math.ceil(hi / hz) && i < fd.length; i++){ s += fd[i]; c++; }
+  return c ? s / c : 0;
+}
+function analyze(){
+  if(!current || !analyser){ st.level = 0; return; }
+  analyser.getFloatTimeDomainData(td);
+  let s = 0; for(let i = 0; i < td.length; i++) s += td[i] * td[i];
+  const db = 20 * Math.log10(Math.sqrt(s / td.length) + 1e-9);
+  st.level = clamp((db + +$('#sens').value) / 28, 0, 1);
+  analyser.getByteFrequencyData(fd);
+  const lo = bandAvg(300, 900), hi = bandAvg(1200, 3200);
+  const b = clamp((hi / (lo + hi + 1e-6) - .15) / .45, 0, 1);
+  if(st.level > .05) st.bright += (b - st.bright) * .3;
+}
+
+/* ---------- 口の描画 ---------- */
+function drawMouth(open, w){
+  const cx = 300, cy = 392;
+  if(open < 1.5){
+    el.mouthOpen.style.display = 'none';
+    el.mouthLine.style.display = '';
+    el.mouthLine.setAttribute('d', `M${cx-13} ${cy} Q${cx} ${cy+7} ${cx+13} ${cy}`);
+    return;
+  }
+  el.mouthLine.style.display = 'none';
+  el.mouthOpen.style.display = '';
+  const L = cx - w / 2, R = cx + w / 2, up = cy - open * .2;
+  const d = `M${P(L)} ${cy} C${P(L+w*.06)} ${P(cy+open*1.33)} ${P(R-w*.06)} ${P(cy+open*1.33)} ${P(R)} ${cy} ` +
+            `C${P(cx+w/4)} ${P(up)} ${P(cx-w/4)} ${P(up)} ${P(L)} ${cy} Z`;
+  el.mouthFill.setAttribute('d', d);
+  el.mouthStroke.setAttribute('d', d);
+  el.mouthClip.setAttribute('d', d);
+  el.teeth.setAttribute('y', P(cy - open * .3));
+  el.teeth.setAttribute('height', P(open * .38));
+  el.tongue.setAttribute('cy', P(cy + open * .85));
+  el.tongue.setAttribute('rx', P(w * .32));
+  el.tongue.setAttribute('ry', P(open * .38));
+}
+
+/* ---------- 髪揺れ(バネ) ---------- */
+function spring(k, d){ return { f: 0, v: 0, k, d, step(input, dt){ const n = dt * 60; this.v += ((input - this.f) * this.k - this.v * this.d) * n; this.f += this.v * n; return this.f - input; } }; }
+const hairS = spring(.06, .18), sideS = spring(.04, .12), ahogeS = spring(.09, .1);
+
+/* ---------- 視線 ---------- */
+const mouse = { x: 0, y: 0, sx: 0, sy: 0 };
+addEventListener('pointermove', e => {
+  const r = $('#svg').getBoundingClientRect();
+  mouse.x = clamp((e.clientX - (r.left + r.width / 2)) / (r.width / 2), -1, 1);
+  mouse.y = clamp((e.clientY - (r.top + r.height * .35)) / (r.height / 2), -1, 1);
+});
+
+/* ---------- メインループ ---------- */
+const t0 = performance.now(); let last = t0;
+function loop(now){
+  const t = (now - t0) / 1000, dt = Math.min(.05, (now - last) / 1000); last = now;
+  analyze();
+  $('#meter i').style.width = (st.level * 100) + '%';
+
+  mouse.sx += (mouse.x - mouse.sx) * .08; mouse.sy += (mouse.y - mouse.sy) * .08;
+  const talk = st.open / 30;
+  const yaw = .3 * Math.sin(t * .6) + .12 * Math.sin(t * 1.7) + mouse.sx * .55;
+  const pitch = .25 * Math.sin(t * .8) + mouse.sy * .35 + talk * .5;
+  const tilt = 2.6 * Math.sin(t * .45) + yaw * 2 + talk * 1.2 * Math.sin(t * 7);
+  const dx = yaw * 12, dy = pitch * 6;
+
+  // 呼吸
+  const breath = Math.sin(t * 1.8) * 2.5;
+  el.body.setAttribute('transform', `translate(0 ${P(breath)})`);
+  const headT = `rotate(${P(tilt)} 300 460) translate(${P(dx * .2)} ${P(Math.sin(t * 1.8 - .6) * 1.2 + dy * .3)})`;
+  el.head.setAttribute('transform', headT);
+  el.hairBackHead.setAttribute('transform', headT);
+
+  // 疑似3D: パーツごとに移動量を変えて顔の向きを表現
+  const input = tilt + yaw * 6;
+  const sway = hairS.step(input, dt) + Math.sin(t * 1.3) * .6;
+  const sway2 = sideS.step(input, dt) + Math.sin(t * 1.1 + 1) * .8;
+  const sway3 = ahogeS.step(input + talk * 8, dt);
+  el.face.setAttribute('transform', `translate(${P(dx * .25)} ${P(dy * .3)})`);
+  el.features.setAttribute('transform', `translate(${P(dx)} ${P(dy)})`);
+  el.brows.setAttribute('transform', `translate(${P(dx)} ${P(dy - talk * 4)})`);
+  el.bangs.setAttribute('transform', `translate(${P(dx * 1.1)} ${P(dy * .5)}) translate(300 110) skewX(${P(sway * .5)}) translate(-300 -110)`);
+  el.ahoge.setAttribute('transform', `translate(${P(dx * 1.1)} ${P(dy * .5)}) rotate(${P(sway3 * 3 + Math.sin(t * 2.2) * 3)} 301 106)`);
+  el.sideL.setAttribute('transform', `translate(${P(dx * .6)} ${P(dy * .4)}) rotate(${P(sway2 * 1.4)} 222 210)`);
+  el.sideR.setAttribute('transform', `translate(${P(dx * .6)} ${P(dy * .4)}) rotate(${P(sway2 * 1.4)} 378 210)`);
+  el.hairBack.setAttribute('transform', `translate(${P(-dx * .4)} ${P(-dy * .2)}) rotate(${P(sway * .6)} 300 220)`);
+
+  // まばたき
+  if(st.blinkT < 0 && t > st.nextBlink){ st.blinkT = 0; }
+  let s = 1;
+  if(st.blinkT >= 0){
+    st.blinkT += dt;
+    const p = st.blinkT / .16;
+    s = p < 1 ? 1 - Math.sin(Math.PI * p) : 1;
+    if(p >= 1){
+      st.blinkT = -1;
+      st.doubleBlink = !st.doubleBlink && Math.random() < .2;
+      st.nextBlink = t + (st.doubleBlink ? .12 : 2 + Math.random() * 4);
+    }
+  }
+  const gx = clamp(yaw * 4 + mouse.sx * 6, -7, 7), gy = clamp(mouse.sy * 5 + pitch * 2, -5, 5);
+  eyes.forEach((e, i) => {
+    e.el.setAttribute('transform', `translate(0 302) scale(1 ${P(Math.max(s, .1))}) translate(0 -302)`);
+    const closed = s < .3;
+    e.open.style.display = closed ? 'none' : '';
+    e.closed.style.display = closed ? '' : 'none';
+    e.iris.setAttribute('transform', `translate(${P(i ? -gx : gx)} ${P(gy)})`);
+  });
+
+  // 口
+  const tOpen = st.level * 30 * (1 - .25 * st.bright);
+  const tW = st.level > .05 ? 20 + 18 * st.bright + st.level * 5 : 28;
+  st.open += (tOpen - st.open) * (tOpen > st.open ? .55 : .3);
+  st.width += (tW - st.width) * .25;
+  drawMouth(st.open, st.width);
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
