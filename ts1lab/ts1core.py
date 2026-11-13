@@ -694,6 +694,24 @@ class TS1:
         """字の横の倍率（普通は 1.0。横に縮める型は CONDENSE）。字形の横幅と字送りの両方に掛かる。字間は縮めない"""
         return self.CONDENSE if self.scls_mode() & 0x10 else 1.0
 
+    def style_runs(self):
+        """書式のまとまり → [[字の番号, ...], ...]（終端は除く）。その字に効いている書式（装飾・倍率・斜体・文字サイズ・フォント・
+        縦ずらし）が直前の字と違う所で区切る。字間の違いでは区切らない（二色: [前半][１４][得点]。赤: [衝][撃プレー]）"""
+        cur = {}
+        runs, prev = [], None
+        for i, ch in enumerate(self.chars):
+            for tg in ("ADCO", "ACMG", "ASLP", "ACSZ", "ACTP"):
+                if tg in ch.attrs:
+                    cur[tg] = ch.attrs[tg]
+            if not ch.code:
+                continue
+            key = (tuple(cur.get(tg) for tg in ("ADCO", "ACMG", "ASLP", "ACSZ", "ACTP")), bytes(ch.pre_raw[18:22]))
+            if key != prev:
+                runs.append([])
+                prev = key
+            runs[-1].append(i)
+        return runs
+
     def slants(self):
         """各文字の斜体の角度（度。ASLP の 1 つめ）。無い文字は直前の値を引き継ぐ。
         VWS は「縦横に拡大した座標」を x − y × tan(角度) で傾ける（赤・二色の文字面の PNG と 1 画素も違わない）"""
@@ -1214,8 +1232,11 @@ class FontGlyphSource:
 
 def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False, mags=None,
-               keep_style=None):
+               keep_style=None, segments=None):
     """テンプレートの書式で text を組み直し、(chars, glyphs) を返す。
+
+    - segments: 書式のまとまりごとに分けた文言のリスト（"".join(segments) == text）。雛形の style_runs() と同じ数。
+      まとまり j の字は、雛形のまとまり j の字の属性を順に写す（雛形より長いぶんは直前の字の書式が続く）
 
     - keep_style: True なら、字ごとの書式（装飾の切り替え・倍率・字間・縦ずらし）を「何字目か」でそのまま引き継ぐ
       （i 字目は雛形の i 字目の属性を写す。雛形より長いぶんは直前の字の書式が続く）。同じ文言なら元とバイト単位で同じになる。
@@ -1287,12 +1308,26 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
 
     prev_mag = mag_of(first)
     chars = []
+    if segments is not None:
+        keep_style = True
     if keep_style is None:
         keep_style = not template.is_plain()
     if keep_style:
         tmpl_chars = [ch for ch in template.chars if ch.code != 0]
         cur_sp, cur_mg = 0.0, (100.0, 100.0)          # いま作っている並びで、その字に効く字間・倍率
         t_sp, t_mg = template.spacings(), template.magnifications()
+        # 新しい i 字目が雛形の何字目の属性を写すか（None = 写さない。直前の書式が続く）と、縦ずらしを借りる字
+        if segments is not None:
+            runs = template.style_runs()
+            assert len(segments) == len(runs) and "".join(segments) == text, "segments が雛形のまとまりの数と合いません"
+            src_of, pre_of = [], []
+            for seg, run in zip(segments, runs):
+                for k in range(len(seg)):
+                    src_of.append(run[k] if k < len(run) else None)
+                    pre_of.append(run[min(k, len(run) - 1)])
+        else:
+            src_of = [i if i < len(tmpl_chars) else None for i in range(len(text))]
+            pre_of = [min(i, len(tmpl_chars) - 1) for i in range(len(text))]
         for i, c in enumerate(codes):
             if c == 0:
                 if last is not None:
@@ -1300,12 +1335,13 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                 else:
                     chars.append(Char(0, 0, uscu=first.uscu))
                 continue
-            if i < len(tmpl_chars):
-                src = tmpl_chars[i]
+            if src_of[i] is not None:
+                src = template.chars[src_of[i]]
                 attrs, order_t, pre = dict(src.attrs), list(src.attr_order), src.pre_raw
-                want_sp, want_mg = t_sp[i], t_mg[i]
+                want_sp, want_mg = t_sp[src_of[i]], t_mg[src_of[i]]
             else:
-                attrs, order_t, pre = {}, [], (tmpl_chars[-1].pre_raw if tmpl_chars else b"\x00" * 22)
+                attrs, order_t = {}, []
+                pre = template.chars[pre_of[i]].pre_raw if tmpl_chars else b"\x00" * 22
                 want_sp, want_mg = cur_sp, cur_mg
             if spacing is not None and i < len(spacing):
                 want_sp = float(spacing[i])

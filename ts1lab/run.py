@@ -564,6 +564,16 @@ def retype_bytes(cfg, t, text, quiet=False):
     say = (lambda *a: None) if quiet else print
     notes = []
     text = text.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    # 色や大きさが途中で変わる型: 「前半|１４|得点」のように | で区切ると、区切りごとに雛形のまとまりの書式を当てる
+    runs = t.style_runs()
+    segments = None
+    if len(runs) > 1 and "|" in text:
+        segments = text.split("|")
+        now = "|".join("".join(t.chars[i].char for i in run) for run in runs)
+        if len(segments) != len(runs) or any(not s_ for s_ in segments):
+            raise RuntimeError(f"この型は書式のまとまりが {len(runs)} つです（元の文言の区切り: {now}）。"
+                               f"| で {len(runs)} つに区切ってください（今は {len(segments)} つ）")
+        text = "".join(segments)
     if not text.strip():
         raise RuntimeError("文言が空です")
     if t.kind == "CSSL" and "\n" in text:
@@ -585,7 +595,7 @@ def retype_bytes(cfg, t, text, quiet=False):
                            "（そのフォントを PC に入れるか、元の .ts1 にある字だけで組んでください）")
     # 普通の型は字間 0 で組み直す。装飾つきの型は、字間も「何文字目か」で元の値を引き継ぐ（二色の数字の −30・−68 など）
     spacing = [0.0] * (len(text) + 1) if t.is_plain() else None
-    chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True)
+    chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True, segments=segments)
     out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
     t2 = TS1(out)
     width = max(len(line) for line in text.split("\n")) * t2.char_size[0]
@@ -600,10 +610,10 @@ def retype_bytes(cfg, t, text, quiet=False):
         mags = t.magnifications()
         mag_switch = [k for k in visible[1:] if mags[k] != mags[k - 1]]
         n_old, n_new = len(visible), len([c for c in text if c != "\n"])
-        if (switch or mag_switch) and n_old != n_new:
-            at = sorted(set(switch + mag_switch))
-            notes.append(f"字ごとに色や大きさが変わる型です（元: {'・'.join(str(k + 1) for k in at)} 文字目から）。"
-                         f"変わり目は何文字目かで決まるので、文字数が違う文言（{n_old} → {n_new} 文字）では狙いとずれます")
+        if len(runs) > 1 and segments is None and n_old != n_new:
+            now = "|".join("".join(t.chars[i].char for i in run) for run in runs)
+            notes.append(f"色や大きさが途中で変わる型です（元の区切り: {now}）。区切りを書かなかったので、変わり目は元と同じ「何文字目か」になります。"
+                         f"文字数が違う文言（{n_old} → {n_new} 文字）では狙いとずれるので、「{now}」のように | で区切って書いてください")
         if t.h_condense() != 1.0:
             notes.append("字を横に縮める型です（金・縞と同じ設定）。縮める倍率は金・縞の書体で測った値なので、"
                          "ほかの書体の型では打ち替えたあと VWS で字の位置を確かめてください")
@@ -677,12 +687,9 @@ def _type_memo(t):
     if not t.is_plain():
         kinds = sorted({d["role_ja"].split("（")[0] for ds in t.decorations_per_char() for d in ds})
         memo.append("装飾つき: " + "・".join(kinds))
-        per = t.decorations_per_char()
-        sig = [tuple((d["kind"], d["color_resource"]) for d in ds) for ds in per]
-        mags = t.magnifications()
-        at = [k + 1 for k in range(1, len(t.chars)) if t.chars[k].code and (sig[k] != sig[k - 1] or mags[k] != mags[k - 1])]
-        if at:
-            memo.append(f"{'・'.join(map(str, at))} 文字目から色か大きさが変わる")
+        runs = t.style_runs()
+        if len(runs) > 1:
+            memo.append("色や大きさが途中で変わる。区切りを | で書く（元: " + "|".join("".join(t.chars[i].char for i in run) for run in runs) + "）")
     return " / ".join(memo)
 
 
