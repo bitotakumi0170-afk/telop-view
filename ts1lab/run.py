@@ -9,6 +9,11 @@
                                         （to-ps / text / info でも自動で特定する。これは結果を詳しく見たいとき・候補を出したいとき用）
   python run.py font-name 番号 名前    → フォント番号に名前を手で登録（PC に無いフォントを VWS の画面で確かめたとき）
   python run.py text   素材.ts1 [新しい文言] → 書式はそのまま文言だけ打ち替え（素材_打ち替え.ts1 / _確認.png）。文言を省くと入力を求める
+  python run.py texture 素材.ts1      → 文字面に貼る模様の画像を取り出す（素材_模様<番号>_面<k>.png。値はそのまま 0〜255 の濃淡）
+  python run.py texture-in 素材.ts1 画像.png [番号] [面]
+                                      → 模様を画像で差し替える（素材_模様差し替え.ts1）。番号・面は texture の出力名のもの（省くと最初の模様の面 0）
+  python run.py gradient 素材.ts1 番号 色1,色2,... [位置1,位置2,...]
+                                      → グラデーションの色（と位置 0〜255）を差し替える（素材_グラデ差し替え.ts1）。色は #RRGGBB か #RRGGBBAA
 """
 import json
 import logging
@@ -582,6 +587,88 @@ def retype(cfg, path, text=None):
     print(f"  → {os.path.basename(base)}.ts1 / {os.path.basename(base)}_確認.png")
 
 
+def _color_text(d):
+    if d.get("gradient"):
+        g = d["gradient"]
+        stops = " → ".join(("#%02X%02X%02X" % c[:3]) + (f"（α{c[3]}）" if c[3] != 255 else "") + f"@{pos}" for pos, c in g["stops"])
+        return f"グラデーション {stops}" + ("（模様の画像つき）" if g["image"] else "")
+    if d.get("resource_type") == "CPTN":
+        return "模様の画像"
+    return f"色 {d['color_hex']}" + (f"（α{d['color'][3]}）" if d.get("color") and d["color"][3] != 255 else "")
+
+
+def texture_out(cfg, path):
+    """模様の画像を PNG に取り出す。値は .ts1 の中の 0〜255 そのまま（濃淡画像）"""
+    import wpf
+    with open(path, "rb") as f:
+        t = TS1(f.read())
+    tex = wpf.textures_of(t)
+    if not tex:
+        print("  模様の画像はありません")
+        return
+    stem = os.path.splitext(path)[0]
+    for i, tag, tx in tex:
+        imgs = tx.images()
+        users = [f"{k + 1} 字目" for k, ds in enumerate(t.decorations_per_char()) if any(d["color_resource"] == i for d in ds)]
+        print(f"  模様 {i}（{'グラデーション' if tag == 'CGRD' else '模様'}・種類 {tx.kind}）{tx.width}×{tx.height} 面 {len(imgs)} 枚"
+              + (f"　使っている字: {users[0]}〜{users[-1]}" if users else ""))
+        for k, im in enumerate(imgs):
+            out = f"{stem}_模様{i}_面{k}.png"
+            im.save(out)
+            print(f"    → {os.path.basename(out)}")
+
+
+def texture_in(cfg, path, png, index=None, plane=0):
+    """模様を画像で差し替える。ほかのバイトは変えない（色・字形・装飾はそのまま）"""
+    import numpy as np
+    from PIL import Image
+    import wpf
+    with open(path, "rb") as f:
+        data = f.read()
+    t = TS1(data)
+    tex = {i: (tag, tx) for i, tag, tx in wpf.textures_of(t)}
+    if not tex:
+        raise ValueError("このファイルには模様の画像がありません")
+    index = min(tex) if index is None else int(index)
+    tag, tx = tex[index]
+    planes = tx.planes()
+    im = Image.open(png).convert("L")
+    if im.size != (tx.width, tx.height):
+        print(f"  画像の大きさ {im.size[0]}×{im.size[1]} を {tx.width}×{tx.height} に合わせます")
+        im = im.resize((tx.width, tx.height), Image.LANCZOS)
+    planes[int(plane)] = np.asarray(im, np.uint8)
+    new_raw = tx.replaced(planes)
+    res = list(t.resources)
+    res[index] = (tag, new_raw)
+    out = t.rebuild_resources(res)
+    dst = os.path.splitext(path)[0] + "_模様差し替え.ts1"
+    with open(dst, "wb") as f:
+        f.write(out)
+    print(f"  模様 {index} の面 {plane} を差し替えました → {os.path.basename(dst)}")
+
+
+def gradient_set(cfg, path, index, colors, positions=None):
+    from ts1core import replace_gradient
+    with open(path, "rb") as f:
+        t = TS1(f.read())
+    index = int(index)
+    tag, raw = t.resources[index]
+    if tag != "CGRD":
+        raise ValueError(f"リソース {index} はグラデーションではありません（{tag}）")
+    cols = []
+    for c in colors.split(","):
+        c = c.strip().lstrip("#")
+        cols.append(tuple(int(c[k:k + 2], 16) for k in range(0, len(c), 2)) + ((255,) if len(c) == 6 else ()))
+    pos = [int(v) for v in positions.split(",")] if positions else None
+    res = list(t.resources)
+    res[index] = (tag, replace_gradient(raw, cols, pos))
+    out = t.rebuild_resources(res)
+    dst = os.path.splitext(path)[0] + "_グラデ差し替え.ts1"
+    with open(dst, "wb") as f:
+        f.write(out)
+    print(f"  グラデーション {index} を {len(cols)} 色にしました → {os.path.basename(dst)}")
+
+
 def info(cfg, path):
     from structure import dump, format_dump
     with open(path, "rb") as f:
@@ -602,8 +689,16 @@ def info(cfg, path):
             col = f"色 {d['color_hex']}"
         op = d.get("opacity256", 256) * 100 / 256
         print(f"  装飾{d['index']}: {d['role_ja']} {col} 不透明度 {op:g}% 太さ {d.get('width_px', d['width'])}px"
-              + (f" + 追加 {d['extra']}px" if d.get("extra") else ""))
+              + (f" + 追加 {d['extra']}px" if d.get("extra") else "") + f"（リソース {d['color_resource']}）")
     print(f"  字間: {i['spacings'][:len(i['text'])]}")
+    # 字ごとに装飾が切り替わるファイル（属性は直前の字から引き継ぐ）
+    per = t.decorations_per_char()
+    sig = [tuple((d["kind"], d["color_resource"], d["opacity256"]) for d in ds) for ds in per]
+    switch = [k for k in range(1, len(sig)) if sig[k] != sig[k - 1] and t.chars[k].code]
+    for k in switch:
+        print(f"  {k + 1} 字目（{t.chars[k].char}）から装飾が変わる:")
+        for d in per[k]:
+            print(f"      {d['role_ja']} " + _color_text(d) + f" 不透明度 {d['opacity256'] * 100 / 256:g}% 太さ {d['width_px']}px")
     out = os.path.splitext(path)[0] + "_構造.txt"
     with open(out, "w", encoding="utf-8-sig") as f:
         f.write(format_dump(dump(data)) + "\n")
@@ -646,6 +741,18 @@ def main():
             return 1
         set_font_name(cfg, files[0], files[1])
         return 0
+    if cmd == "texture-in":
+        if len(files) < 2:
+            print("使い方: python run.py texture-in 素材.ts1 画像.png [番号] [面]")
+            return 1
+        texture_in(cfg, files[0], files[1], files[2] if len(files) > 2 else None, files[3] if len(files) > 3 else 0)
+        return 0
+    if cmd == "gradient":
+        if len(files) < 3:
+            print("使い方: python run.py gradient 素材.ts1 番号 色1,色2,... [位置1,位置2,...]")
+            return 1
+        gradient_set(cfg, files[0], files[1], files[2], files[3] if len(files) > 3 else None)
+        return 0
     if cmd == "text":
         try:
             retype(cfg, files[0], files[1] if len(files) > 1 else None)
@@ -654,7 +761,7 @@ def main():
             traceback.print_exc()
             return 1
         return 0
-    fn = {"to-ps": to_ps, "to-ts1": to_ts1, "info": info, "identify": identify}[cmd]
+    fn = {"to-ps": to_ps, "to-ts1": to_ts1, "info": info, "identify": identify, "texture": texture_out}[cmd]
     ng = 0
     for p in files:
         print(os.path.basename(p))

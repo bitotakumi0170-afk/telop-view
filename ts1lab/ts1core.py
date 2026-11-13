@@ -301,6 +301,24 @@ def decode_gradient(raw, order=COLOR_ORDER):
     return {"stops": list(zip(pos, cols)), "image": raw.find(b"WPF1") >= 0}
 
 
+def replace_gradient(raw, colors, positions=None, order=COLOR_ORDER):
+    """CGRD の色（と位置）を差し替えた生バイト列を返す。色の数が変わってもよい（長さの欄を直す）。
+    colors = [(r, g, b, a), ...]。positions を省くと 0〜255 を等分"""
+    n_old = raw[18]
+    n = len(colors)
+    if positions is None:
+        positions = [round(255 * k / (n - 1)) if n > 1 else 0 for k in range(n)]
+    assert len(positions) == n
+    body = bytearray()
+    for c in colors:
+        r, g, b_, a = (tuple(c) + (255,))[:4]
+        body += bytes((r, g, b_, a)) if order == "RGBA" else bytes((b_, g, r, a))
+    body += bytes(int(v) & 255 for v in positions)
+    out = bytearray(raw[:18]) + bytes((n,)) + body + raw[19 + 5 * n_old:]
+    struct.pack_into("<I", out, 4, len(out))
+    return bytes(out)
+
+
 def decode_color(raw, order=COLOR_ORDER):
     """CRGB チャンク → (r, g, b, a)"""
     c = raw[14:18]
@@ -849,6 +867,20 @@ class TS1:
         swrk = b"SWRK" + struct.pack("<I", 8 + len(swrk_body)) + swrk_body
         tsrc_body = b[8:sw] + swrk
         return bytearray(b"TSRC" + struct.pack("<I", 8 + len(tsrc_body)) + tsrc_body)
+
+    def rebuild_resources(self, resources):
+        """ORMP のリソースだけ差し替えて組み直す（数と並びは同じ。中身の長さは変わってよい）。ほかのバイトは変えない"""
+        assert len(resources) == len(self.resources), "リソースの数を変えることはできません"
+        b = self.data
+        ormp = bytearray()
+        for t, r in resources:
+            ormp += r.encode(keep_header=True) if t == "RCHR" else r
+        ormp_chunk = b"ORMP" + struct.pack("<I", 12 + len(ormp)) + self.ormp_head + struct.pack("<H", len(resources)) + ormp
+        om = self.off["OMR0"]
+        omr0 = b[om:om + u32(b, om + 4)]
+        c = self.off["CSML"]
+        csml = b[c:self.csml_end]
+        return bytes(self._assemble(omr0, ormp_chunk, csml))
 
     def is_plain(self):
         """文字面 + 縁（+ 影）だけの、描画範囲の式が分かっている装飾か（字詰め AFIN = 1 や、光彩・立体などが無い）"""
