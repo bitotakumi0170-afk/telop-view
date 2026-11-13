@@ -604,9 +604,9 @@ def retype_bytes(cfg, t, text, quiet=False):
             at = sorted(set(switch + mag_switch))
             notes.append(f"字ごとに色や大きさが変わる型です（元: {'・'.join(str(k + 1) for k in at)} 文字目から）。"
                          f"変わり目は何文字目かで決まるので、文字数が違う文言（{n_old} → {n_new} 文字）では狙いとずれます")
-        afin = t.base_attr("AFIN")
-        if afin is not None and u32(afin, 2) and n_old != n_new:
-            notes.append("字の並び方が未解明の型です（金・縞と同じ設定）。打ち替えたあと VWS で字の位置を確かめてください")
+        if t.h_condense() != 1.0:
+            notes.append("字を横に縮める型です（金・縞と同じ設定）。縮める倍率は金・縞の書体で測った値なので、"
+                         "ほかの書体の型では打ち替えたあと VWS で字の位置を確かめてください")
         notes.append("装飾つきの型です。確認画像の装飾は近似なので、最初の 1 回は VWS で見てください")
     return out, notes
 

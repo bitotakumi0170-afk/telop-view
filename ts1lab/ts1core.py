@@ -115,6 +115,15 @@ class Glyph:
                 return a_ + b_ + c_
         return CELL
 
+    def advance_fx_condensed(self, size_px, f):
+        """横に縮める型での字送り（1/256px の整数）= floor((A + B + C) × k × f)。A・B・C を別々に切り捨てない
+        （金の 8 字: 1 字あたり 34468 = floor(38400 × 0.897626)。行の幅 274464 とちょうど合う）"""
+        h = self.header_raw
+        a_, b_, c_ = struct.unpack_from("<iii", h, 44) if h and len(h) >= 56 else (0, 0, 0)
+        if a_ + b_ + c_ <= 0:
+            a_, b_, c_ = 0, CELL, 0
+        return int(math.floor((a_ + b_ + c_) * size_px * FIX / CELL * f))
+
     def advance_fx(self, size_px):
         """字送り（1/256px の整数）。VWS は字形ヘッダの A（左の余白）・B（字の幅）・C（右の余白）を
         別々に 1/256px へ切り捨ててから足す。全角（A + B + C = 2048）でも端数の出方で 0〜2/256px 短くなる
@@ -670,6 +679,21 @@ class TS1:
             out.append(cur)
         return out
 
+    # 横に縮める型（SCLS の 1 バイト目が 0x10）での横の倍率。金（サイズ 150・8 字）と縞（サイズ 230・3 字）の行の幅と、
+    # 金の文字面の PNG（91611 画素中 58 画素の差）から 0.897622〜0.897630。値はファイルの中には無い
+    # （フォント 1453 だけで確かめた。フォントごとに違う値かどうかは未確認）
+    CONDENSE = 0.897626
+
+    def scls_mode(self):
+        """SCLS の 1 バイト目（0・2・4・6・0x10 を確認。0x10 = 字を横に縮める型）"""
+        b = self.data
+        q = b.find(b"SCLS", self.off["CSML"], self.off["ESET_chars"])
+        return b[q + 8] if q >= 0 else 0
+
+    def h_condense(self):
+        """字の横の倍率（普通は 1.0。横に縮める型は CONDENSE）。字形の横幅と字送りの両方に掛かる。字間は縮めない"""
+        return self.CONDENSE if self.scls_mode() & 0x10 else 1.0
+
     def slants(self):
         """各文字の斜体の角度（度。ASLP の 1 つめ）。無い文字は直前の値を引き継ぐ。
         VWS は「縦横に拡大した座標」を x − y × tan(角度) で傾ける（赤・二色の文字面の PNG と 1 画素も違わない）"""
@@ -704,6 +728,7 @@ class TS1:
         sp = self.spacings()
         mg = self.magnifications()
         glyphs = self.glyphs
+        hc = self.h_condense()
         lines, cur = [], []
         for ch, s_, m_ in zip(self.chars, sp, mg):
             if ch.code == 0:
@@ -712,7 +737,8 @@ class TS1:
                 lines.append(cur); cur = []
                 continue
             g = self.glyph_at(ch.glyph_index)
-            cur.append((ch, g, int(math.floor(s_ * FIX)), m_, g.advance_fx(size_w * m_[0] / 100)))
+            adv = g.advance_fx(size_w * m_[0] / 100) if hc == 1.0 else g.advance_fx_condensed(size_w * m_[0] / 100, hc)
+            cur.append((ch, g, int(math.floor(s_ * FIX)), m_, adv))
         lines.append(cur)
         x0 = int(round(self.pos[0] * FIX))
         y0 = self.pos[1]
@@ -727,7 +753,7 @@ class TS1:
             for k, (ch, g, s_fx, m_, adv) in enumerate(line):
                 if k:
                     x += s_fx
-                out.append((ch, g, x, y, Scale(size_w / CELL * m_[0] / 100, size_h / CELL * m_[1] / 100)))
+                out.append((ch, g, x, y, Scale(size_w / CELL * m_[0] / 100 * hc, size_h / CELL * m_[1] / 100)))
                 x += adv
         return out
 
@@ -739,13 +765,16 @@ class TS1:
         """行ごとの幅（1/256px の整数）= 字送りの合計 + 2 字目以降の字間"""
         out, cur, n = [], 0, 0
         size_w = self.char_size[0]
+        hc = self.h_condense()
         for ch, s_, m_ in zip(self.chars, self.spacings(), self.magnifications()):
             if ch.code == 0:
                 continue
             if ch.code in (0x0A, newline_code):
                 out.append(cur); cur, n = 0, 0
                 continue
-            cur += self.glyph_at(ch.glyph_index).advance_fx(size_w * m_[0] / 100) + (int(math.floor(s_ * FIX)) if n else 0)
+            g_ = self.glyph_at(ch.glyph_index)
+            cur += (g_.advance_fx(size_w * m_[0] / 100) if hc == 1.0 else g_.advance_fx_condensed(size_w * m_[0] / 100, hc)) \
+                + (int(math.floor(s_ * FIX)) if n else 0)
             n += 1
         out.append(cur)
         return out
@@ -944,14 +973,13 @@ class TS1:
                                                for ds in self.decorations_per_char() for d in ds)
 
     def _finish_rebuild(self, out, changed, args, pos_in, edge_width, _line_w):
-        afin = self.base_attr("AFIN")
-        tsume = afin is not None and bool(u32(afin, 2))
         # ---- 1 行もの: 文言が変わったら行の幅と左位置を書き直す（中心は動かさない）
-        #      字詰め（AFIN = 1）のファイルは字送りの式がまだ分からないので、行の幅と位置は元のまま残す
-        if self.kind == "CSSL" and _line_w is None and changed and not tsume:
+        #      横に縮める型は式と保存値が 1/256px 違うことがある（縞）ので、その差は変えたうちに入れない
+        tol = 1.5 / FIX if self.h_condense() != 1.0 else 1e-6
+        if self.kind == "CSSL" and _line_w is None and changed:
             tmp = TS1(bytes(out))
             w = tmp.line_width()
-            if abs(w - self.box[0]) > 1e-6:
+            if abs(w - self.box[0]) > tol:
                 left, base = pos_in if pos_in is not None else self.pos
                 return self.rebuild(pos=(left + self.box[0] / 2 - w / 2, base), _line_w=w, **args)
 

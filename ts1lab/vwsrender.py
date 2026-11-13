@@ -198,6 +198,7 @@ def face_counts(ts1, canvas=(1920, 1080)):
     W, H = canvas
     kf = np.zeros((H, W), np.int32)
     extra = _char_extras(ts1)
+    smooth3 = bool(getattr(ts1, "h_condense", lambda: 1.0)() != 1.0)
     for ch, g, x_fx, y, sc in layout_fx(ts1):
         if not g.contours:
             continue
@@ -218,6 +219,12 @@ def face_counts(ts1, canvas=(1920, 1080)):
         m = mask.reshape(h, SS, w, SS).sum((1, 3)).astype(np.int32)       # 1 ラインぶん (0..64)
         k = m.copy()
         k[:-1] += m[1:]                                                    # 上下 2 ライン
+        if smooth3:
+            # 横に縮める型（金・縞）: 縦が 3 ラインの平均 (m[y−1] + 2 m[y] + m[y+1]) / 2 になる = 2 ライン足しをもう 1 回。
+            # アルファは k[y−1] + k[y]。ここでは 0〜128 の量に直す（奇数のとき切り上げ → アルファが 1 だけ大きくなることがある）
+            k2 = k.copy()
+            k2[1:] += k[:-1]
+            k = (k2 + 1) // 2
         # 字ごとの絵には枠があり、枠の外は描かれない。枠は輪郭データの点（制御点も含む）の範囲を実数のまま置いて決まる
         # （描いた多角形からではない。曲線レコードを壊した確認用ファイルで、読まれない点も範囲に入ることを確認）
         #   上: floor(上端の px − 0.5) の行から（2 ライン足しのぶん 1 行広い。上端 − 0.5 がちょうど整数ならその行から。
