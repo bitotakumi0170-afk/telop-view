@@ -144,7 +144,7 @@ def layer_color(ts1, d, mask, info, order=COLOR_ORDER):
             xs = np.arange(W, dtype=float)[None, :]
             if d.get("flags", 0) == 0x100:
                 # 赤の光沢（層の見出し +8 = 0x100）: 字ごとの正方形（ベースラインから文字サイズぶん上まで、横は文字サイズ × 横倍率）の
-                # 左上の角 → 右下の角へ 0 → 255。斜体と一緒に傾く。光沢だけの PNG（56）の 3 段の色分けと 93% 一致（衝は 99.8%）
+                # 左上の角 → 右下の角へ 0 → 255。斜体と一緒に傾く。光沢だけの PNG（56）の 3 段の色分けと 93% 一致（1 字目だけなら 99.8%）
                 sh = info.get("shear", 0.0)
                 org = info["origins"]
                 ox = np.array([o for o, cw, ch in org]) if org else np.zeros(1)
