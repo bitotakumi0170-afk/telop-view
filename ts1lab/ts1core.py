@@ -359,8 +359,11 @@ class Scale(float):
 class TS1:
     """サンプル構造に沿ったパーサ。未解明部分は生バイトのまま保持し、再構築時に再利用する。"""
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, element: int = 0):
+        """element = 何番目の文字要素（CSML / CSSL）を「主」として読むか（0 始まり。図形は数えない）。
+        主の要素が chars / pos / box / rebuild の対象になる。リソース（字形・色）は全部の要素で共通"""
         self.data = bytes(data)
+        self.element = int(element)
         b = self.data
         chunk_at(b, 0, b"TSRC")
         assert u32(b, 4) == len(b), "TSRC サイズがファイル長と一致しない"
@@ -590,8 +593,11 @@ class TS1:
         texts = [el for el in self.elements if el[0] in ("CSML", "CSSL")]
         if not texts:
             raise ValueError(f"0x{p:x}: 文字の要素（CSML / CSSL）がありません: {[el[0] for el in self.elements]}")
-        c = texts[0][1]
-        c_end = c + texts[0][2]
+        if not (0 <= self.element < len(texts)):
+            raise ValueError(f"文字の要素は {len(texts)} つです（{self.element + 1} つめはありません）")
+        self.text_count = len(texts)
+        c = texts[self.element][1]
+        c_end = c + texts[self.element][2]
         self.csml_end = c_end
         ctag, _ = chunk_at(b, c)
         self.kind = ctag.decode()      # CSML = 文字枠つき（複数行） / CSSL = 1 行もの（枠なし）
@@ -998,6 +1004,73 @@ class TS1:
         c = self.off["CSML"]
         return bytes(self._assemble(b[om:om + u32(b, om + 4)], ormp_chunk, b[c:self.csml_end]))
 
+    # -- 図形（座布団など） -------------------------------------------------
+    def figures(self, order=COLOR_ORDER):
+        """図形の要素（CGRP）の一覧 → [{"index": 要素の並びの番号, "offset", "size", "x": 左, "y": 下端, "w", "h",
+        "rect": (左, 上, 右, 下), "decorations": [...], "p1", "p2", "simple": 幅を変えられる形か}]。
+        CGRP は文字の要素と同じ作りの入れ物（位置・トランジション…）で、字の並びの代わりに MFIG（図形 1 つ）が入っている。
+        MFIG: u16 版, i32 −1, u32 0, 幅（24.8）, 高さ（24.8）, 8 バイト 0, DAAR（ADCO = 面と縁。文字と同じ形）, EMTR, 50 バイト
+        （+20 に 24.8 の値 = 10.0、+24 に 26。意味は未解明: 角の丸みと形の種類?）。位置の y は下端（文字のベースラインにあたる）"""
+        b = self.data
+        out = []
+        for i, (tag, o, s) in enumerate(self.elements):
+            if tag != "CGRP":
+                continue
+            end = o + s
+            f = {"index": i, "offset": o, "size": s, "x": i32(b, o + 10) / FIX, "y": i32(b, o + 14) / FIX,
+                 "simple": False, "decorations": []}
+            m = b.find(b"MFIG", o, end)
+            e = b.rfind(b"ESET", o, m) if m > 0 else -1
+            n = u16(b, e + 8) if e > 0 else 0
+            f["count"] = n
+            if m > 0 and n == 1 and e + 10 == m and m + u32(b, m + 4) == end and b[m + 34:m + 38] == b"DAAR":
+                f["w"], f["h"] = i32(b, m + 18) / FIX, i32(b, m + 22) / FIX
+                f["w_off"], f["h_off"] = m + 18, m + 22
+                f["rect"] = (f["x"], f["y"] - f["h"], f["x"] + f["w"], f["y"])
+                a = b.find(b"ADCO", m, end)
+                if a > 0:
+                    try:
+                        f["decorations"] = self._decode_adco(b[a + 8:a + u32(b, a + 4)], order)
+                    except Exception:
+                        f["decorations"] = []
+                em = b.find(b"EMTR", m + 34, end)
+                if em > 0 and em + 32 <= end:
+                    f["p1"], f["p2"] = i32(b, em + 24) / FIX, u32(b, em + 28)
+                    f["p1_off"], f["p2_off"] = em + 24, em + 28
+                f["simple"] = f["w"] > 0 and f["h"] > 0
+            out.append(f)
+        return out
+
+    def shift_element(self, index, dx=0.0, dy=0.0):
+        """要素（文字でも図形でも）を平行移動する → 新しいバイト列。長さは変わらない。
+        位置（要素の頭の x, y）と、位置を持つトランジション（種別 2）の座標を同じだけ動かす"""
+        tag, o, s = self.elements[index]
+        d = bytearray(self.data)
+        struct.pack_into("<ii", d, o + 10, i32(d, o + 10) + fx(dx), i32(d, o + 14) + fx(dy))
+        end = o + s
+        stop = d.find(b"SCLS", o, end)
+        p = o
+        while True:
+            p = d.find(b"XTRS", p, stop if stop > 0 else end)
+            if p < 0:
+                break
+            if u16(d, p + 32) == 2:
+                for k in (34, 46):
+                    struct.pack_into("<i", d, p + k, i32(d, p + k) + fx(dx))
+                for k in (38, 50):
+                    struct.pack_into("<i", d, p + k, i32(d, p + k) + fx(dy))
+            p += 4
+        return bytes(d)
+
+    def resize_figure(self, index, left, width):
+        """図形の左端と幅を変える → 新しいバイト列（長さは変わらない）。高さ・色・縁・トランジションの動きはそのまま"""
+        f = next((x for x in self.figures() if x["index"] == index), None)
+        if f is None or not f["simple"]:
+            raise ValueError("この図形は幅を変えられる形ではありません")
+        d = bytearray(self.shift_element(index, dx=left - f["x"]))
+        struct.pack_into("<i", d, f["w_off"], fx(width))
+        return bytes(d)
+
     def color_targets(self, face_color=None, edge_color=None, order=COLOR_ORDER):
         """色の差し替え先 → {ORMP の添字: 新しい色のバイト列}。
         文字面は「不透明度 100% の単色の文字面」のうち最初の 1 つ、縁は「不透明度 100% の単色で太さのある縁」のうち最初の 1 つだけ。
@@ -1053,7 +1126,7 @@ class TS1:
         #      横に縮める型は式と保存値が 1/256px 違うことがある（縞）ので、その差は変えたうちに入れない
         tol = 1.5 / FIX if self.h_condense() != 1.0 else 1e-6
         if self.kind == "CSSL" and _line_w is None and changed:
-            tmp = TS1(bytes(out))
+            tmp = TS1(bytes(out), self.element)
             w = tmp.line_width()
             if abs(w - self.box[0]) > tol:
                 left, base = pos_in if pos_in is not None else self.pos
@@ -1061,7 +1134,7 @@ class TS1:
 
         # ---- OFRI 描画範囲の更新
         if changed:
-            tmp = TS1(bytes(out))
+            tmp = TS1(bytes(out), self.element)
             bb = None
             try:
                 import vwsrender

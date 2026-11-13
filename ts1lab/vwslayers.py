@@ -282,17 +282,65 @@ def render_layers(ts1, canvas=CANVAS, order=COLOR_ORDER):
     """→ (重ねた RGBA uint8, [(層の名前, その層の RGBA uint8)])。層は上から順。
     文字の要素が 2 つ以上あるとき（図形つき）は、要素ごとに描いて並びの順に重ねる（図形の要素はまだ描けない）"""
     views = ts1.element_views() if hasattr(ts1, "element_views") else [ts1]
-    if len(views) <= 1:
+    figs = {f["index"]: f for f in ts1.figures(order)} if hasattr(ts1, "figures") else {}
+    if len(views) <= 1 and not figs:
         return _render_one(ts1, canvas, order)
     W, H = canvas
     rgb = np.zeros((H, W, 3), np.int64)
     A = np.zeros((H, W), np.int64)
     layers = []
-    for k, v in enumerate(views):
-        img, ls = _render_one(v, canvas, order)
+    # 要素は並びの順に重ねる（あとの要素が上。座布団の図形 → その上の文字、の順に入っている）
+    k = 0
+    for i, (tag, _o, _s) in enumerate(ts1.elements):
+        if tag in ("CSML", "CSSL"):
+            img, ls = _render_one(views[k], canvas, order)
+            name = f"文字{k + 1}"
+            k += 1
+        elif i in figs and figs[i].get("simple"):
+            img, ls = _render_figure(ts1, figs[i], canvas, order)
+            name = "図形"
+        else:
+            continue
         rgb, A = over(rgb, A, img[..., :3].astype(np.int64), img[..., 3].astype(np.int64))
-        layers += [(f"文字{k + 1} {n}", L) for n, L in ls]
+        layers += [(f"{name} {n}", L) for n, L in ls]
     out = np.zeros((H, W, 4), np.uint8)
+    out[..., :3] = np.clip(rgb, 0, 255)
+    out[..., 3] = np.clip(A, 0, 255)
+    out[A == 0] = 0
+    return out, layers
+
+
+def _render_figure(ts1, f, canvas=CANVAS, order=COLOR_ORDER):
+    """図形（四角）を、文字と同じ層の描き方で描く。形は四角として扱う（角の丸みなど MFIG の未解明の値は見ていない = 近似）"""
+    W, H = canvas
+    F = np.zeros((H, W), np.int64)
+    l, tp, r_, b_ = f["rect"]
+    x0, x1 = max(int(round(l)), 0), min(int(round(r_)), W)
+    y0, y1 = max(int(round(tp)), 0), min(int(round(b_)), H)
+    out = np.zeros((H, W, 4), np.uint8)
+    if x1 <= x0 or y1 <= y0:
+        return out, []
+    F[y0:y1, x0:x1] = 128
+    info = {"origins": [(l, f["w"], f["h"])], "baseline": f["y"], "shear": 0.0, "ink_top": y0, "ink_bottom": y1,
+            "left": l, "em_top": f["y"] - f["h"], "size": f["h"]}
+    rgb = np.zeros((H, W, 3), np.int64)
+    A = np.zeros((H, W), np.int64)
+    U = np.zeros_like(F)
+    parts = []
+    for d in f["decorations"]:
+        k, a = layer_shape(d, F, U)
+        U = np.maximum(U, k)
+        a = (a * d["opacity256"]) >> 8
+        c, ca = layer_color(ts1, d, a > 0, info, order)
+        parts.append((np.array(c), (a * ca) // 255, d["role_ja"]))
+    layers = []
+    for c, a, name in reversed(parts):               # 下の層から重ねる
+        rgb, A = over(rgb, A, c, a)
+    for li, (c, a, name) in enumerate(parts):
+        Lr = np.zeros((H, W, 4), np.uint8)
+        Lr[..., :3] = np.clip(c, 0, 255)
+        Lr[..., 3] = np.clip(a, 0, 255)
+        layers.append((f"{li}: {name}", Lr))
     out[..., :3] = np.clip(rgb, 0, 255)
     out[..., 3] = np.clip(A, 0, 255)
     out[A == 0] = 0

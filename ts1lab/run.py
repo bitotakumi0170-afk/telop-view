@@ -650,8 +650,143 @@ def to_ts1(cfg, path):
     print(f"  → {os.path.basename(base)}_VWS用.ts1 / {os.path.basename(base)}_確認.png")
 
 
+ELEM_SEP = "//"       # 文字の要素が 2 つ以上ある型で、要素ごとの文言を区切る
+
+
+def current_text(t):
+    """その型の今の文言を、打ち替えの書き方で返す（要素は // 、書式のまとまりは | 、改行は \\n）"""
+    parts = []
+    for k in range(t.text_count):
+        v = t if k == t.element else TS1(t.data, k)
+        runs = v.style_runs()
+        if len(runs) > 1:
+            s_ = "|".join("".join(v.chars[i].char for i in run) for run in runs)
+        else:
+            s_ = "".join("\n" if ch.code in (0x0A, 0x0D) else ch.char for ch in v.chars if ch.code)
+        parts.append(s_)
+    return ELEM_SEP.join(parts)
+
+
+def _ink(v):
+    """文字要素の字形の範囲（左, 上, 右, 下）。無ければ None"""
+    import vwsrender
+    try:
+        return vwsrender.real_bbox(v)
+    except Exception:
+        return None
+
+
+def _on_figure(bb, f):
+    """字形の範囲 bb の中心が、図形 f の四角の中にあるか（= その図形が座布団になっている）"""
+    if not bb or not f.get("rect"):
+        return False
+    cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+    l, tp, r_, b_ = f["rect"]
+    return l <= cx <= r_ and tp <= cy <= b_
+
+
+def _stretch_figures(before, after, k):
+    """k 番目の文字を打ち替えた前後（before → after）で、その文字が乗っている図形（座布団）を文言に合わせて伸ばす。
+    左右の余白（図形の端から字の端まで）を型と同じに保つ。同じ図形にほかの文字も乗っていれば、全部が収まる幅にする。
+    → (新しいバイト列, 注意の一覧)"""
+    import ts1check
+    t0, t1 = TS1(before, k), TS1(after, k)
+    figs = t0.figures()
+    if not figs:
+        return after, []
+    bb0, bb1 = _ink(t0), _ink(t1)
+    notes, data = [], after
+    for f in figs:
+        if not _on_figure(bb0, f):
+            continue
+        if not f["simple"]:
+            notes.append("この文字は図形（座布団）の上に乗っていますが、図形の形を読めないので幅を変えていません。VWS で図形を直してください")
+            continue
+        if not bb1:
+            continue
+        others = []
+        for j in range(t0.text_count):
+            if j == k:
+                continue
+            ob = _ink(TS1(before, j))
+            if _on_figure(ob, f):
+                others.append(ob)
+        l0, r0 = min([bb0[0]] + [o[0] for o in others]), max([bb0[2]] + [o[2] for o in others])
+        l1, r1 = min([bb1[0]] + [o[0] for o in others]), max([bb1[2]] + [o[2] for o in others])
+        left = round(f["x"] + (l1 - l0))                       # 図形の端は整数の画素に置く（型もそうなっている）
+        right = round(f["x"] + f["w"] + (r1 - r0))
+        if left == round(f["x"]) and right == round(f["x"] + f["w"]):
+            continue
+        prev = data
+        data = TS1(data, k).resize_figure(f["index"], float(left), float(right - left))
+        bad = [m for lv, m in ts1check.check_figure_resize(prev, data, f["index"]) if lv == ts1check.NG]
+        if bad:
+            raise RuntimeError("納品前の検査で止めました（座布団の幅を変える所）: " + " / ".join(bad[:3]))
+        notes.append(f"座布団（図形）を文言に合わせて伸ばしました: 幅 {f['w']:g} → {right - left:g}px、左 {f['x']:g} → {left:g}px"
+                     "（図形の伸ばし方は VWS でまだ確かめていません。最初の 1 回は VWS で見てください）")
+    return data, notes
+
+
+def _extent(data):
+    """全部の要素（文字の字形・読める図形）を合わせた範囲 (左, 上, 右, 下)。無ければ None"""
+    t = TS1(data)
+    boxes = [b for b in (_ink(TS1(data, j)) for j in range(t.text_count)) if b]
+    boxes += [f["rect"] for f in t.figures() if f.get("rect")]
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _fix_ofri(template, out):
+    """要素が複数ある型の描画範囲（OFRI）を書き直す: 型の「全部の要素の範囲 → OFRI」の余白を、新しい範囲にそのまま付ける"""
+    import struct
+    from ts1core import fx
+    u0, u1 = _extent(template), _extent(out)
+    if not u0 or not u1 or u0 == u1:
+        return out
+    t = TS1(template)
+    new = [round(t.ofri_bbox[i] + (u1[i] - u0[i])) for i in range(4)]
+    d = bytearray(out)
+    struct.pack_into("<iiii", d, TS1(out).ofri_bbox_off, *(fx(v) for v in new))
+    return bytes(d)
+
+
 def retype_bytes(cfg, t, text, quiet=False):
-    """打ち替えの本体（ファイルは書かない）→ (新しい .ts1 のバイト列, 注意の一覧)。
+    """打ち替え（ファイルは書かない）→ (新しい .ts1 のバイト列, 注意の一覧)。
+    文字の要素が 2 つ以上ある型は、「1 つめ//2 つめ」のように // で区切ると要素ごとに打ち替える
+    （空にした所はそのまま。// を書かなければ 1 つめだけ）。文字が乗っている図形（座布団）は文言に合わせて伸ばす"""
+    n = t.text_count
+    if n > 1 and ELEM_SEP in text:
+        parts = text.split(ELEM_SEP)
+        if len(parts) != n:
+            raise RuntimeError(f"この型は文字が {n} つあります（今の文言: {current_text(t)}）。"
+                               f"{ELEM_SEP} で {n} つに区切ってください（今は {len(parts)} つ。変えない所は空のままでかまいません）")
+    else:
+        parts = [text] + [""] * (n - 1)
+    if not any(p.strip() for p in parts):
+        raise RuntimeError("文言が空です")
+    data, notes = t.data, []
+    for k, part in enumerate(parts):
+        if not part.strip():
+            continue
+        tk = t if (k == t.element and data is t.data) else TS1(data, k)
+        before = data
+        data, nk = _retype_element(cfg, tk, part, quiet)
+        notes += [m if k == 0 or m.startswith("フォントから作った字") else f"{k + 1} つめの文字: {m}" for m in nk if m not in notes]
+        data, fn = _stretch_figures(before, data, k)
+        notes += fn
+    if len(t.elements) > 1 and data != t.data:
+        data = _fix_ofri(t.data, data)
+        import ts1check
+        try:
+            notes += [m for m in ts1check.screen_overflow(TS1(data).ofri_bbox, t.ofri_bbox) if m not in notes]
+        except Exception:
+            pass
+    return data, notes
+
+
+def _retype_element(cfg, t, text, quiet=False):
+    """文字の要素 1 つ（t の主の要素）の打ち替え → (新しい .ts1 のバイト列, 注意の一覧)。
     書式（位置・色・縁・サイズ・フォント番号・装飾）はそのまま。元の .ts1 にある文字は VWS の字形をそのまま使い、
     無い文字だけ PC のフォントから作る。続けられない問題は RuntimeError"""
     from ts1core import build_text, u32
@@ -706,10 +841,10 @@ def retype_bytes(cfg, t, text, quiet=False):
     spacing = [0.0] * (len(text) + 1) if t.is_plain() else None
     chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True, segments=segments)
     out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
-    t2 = TS1(out)
+    t2 = TS1(out, t.element)
     # ---- 納品前の検査: 壊れていないか、文字のほかの所が型と変わっていないか。NG なら .ts1 を出さない
     import ts1check
-    found = ts1check.check_retype(t.data, out, text, clear_history=cfg.get("clear_history", False))
+    found = ts1check.check_retype(t.data, out, text, clear_history=cfg.get("clear_history", False), element=t.element)
     bad = [m for lv, m in found if lv == ts1check.NG]
     if bad:
         raise RuntimeError("納品前の検査で止めました（この .ts1 は出していません）: " + " / ".join(bad[:4])
@@ -720,11 +855,8 @@ def retype_bytes(cfg, t, text, quiet=False):
         notes.append(f"文字の幅 {width:g}px が枠の幅 {t2.box[0]:g}px を超えています（VWS で左右がはみ出すかもしれません）")
     # ---- 画面からのはみ出し（1 行ものは文言が長いと左右に伸びる）
     try:
-        if len(t.elements) == 1:
+        if len(t.elements) == 1:        # 要素が複数の型は、全部そろってから retype_bytes が見る
             notes += ts1check.screen_overflow(t2.ofri_bbox, t.ofri_bbox)
-        else:                # 要素が複数: 描画範囲（OFRI）は書き直していないので、主の文字の字形の範囲で見る
-            import vwsrender
-            notes += ts1check.screen_overflow(vwsrender.real_bbox(t2), vwsrender.real_bbox(t))
     except Exception:
         pass
     # ---- 普通の型で、型のほうが字ごとに字間を詰めてある（手詰め）とき: 新しい文言には持ち越さない
@@ -821,6 +953,12 @@ def _type_memo(t):
         runs = t.style_runs()
         if len(runs) > 1:
             memo.append("色や大きさが途中で変わる。区切りを | で書く（元: " + "|".join("".join(t.chars[i].char for i in run) for run in runs) + "）")
+    if t.text_count > 1:
+        memo.append(f"文字が {t.text_count} つある。{ELEM_SEP} で区切って書く（変えない所は空でよい）")
+    figs = t.figures()
+    if figs:
+        on = [f for f in figs if any(_on_figure(_ink(TS1(t.data, j)), f) for j in range(t.text_count))]
+        memo.append(f"図形 {len(figs)} つ" + ("（座布団。文言に合わせて伸びる）" if on and all(f["simple"] for f in on) else ""))
     return " / ".join(memo)
 
 
@@ -926,7 +1064,8 @@ def catalog(cfg, folder):
         split = "|".join("".join(t.chars[i].char for i in r) for r in runs) if len(runs) > 1 else ""
         chars = "".join(sorted({ch.char for ch in t.chars if ch.code and ch.code not in (0x0A, 0x0D)}))
         cards.append({
-            "rel": rel, "thumb": thumb_rel, "how": how, "text": t.text.replace("\r", "\n"),
+            "rel": rel, "thumb": thumb_rel, "how": how,
+            "text": current_text(t) if t.text_count > 1 else t.text.replace("\r", "\n"),
             "memo": _type_memo(t).split(" / 色や大きさが途中で変わる")[0], "split": split, "size": f"{t.char_size[0]:g}",
             "multi": len(t.elements) > 1,
             "font": f"{font_name}（番号 {t.font_id}）", "can_new": can_new, "chars": chars,
@@ -1037,9 +1176,7 @@ def stock_check(cfg, target):
             except Exception:
                 can_new = "元にある字だけ"
             # 同じ文言で打ち替えてみる（打ち替えの道が通るか。装飾つきの型は元とバイト単位で同じになるはず）
-            runs = t.style_runs()
-            same = "|".join("".join(t.chars[i].char for i in rr) for rr in runs) if len(runs) > 1 else \
-                "".join("\n" if ch.code in (0x0A, 0x0D) else ch.char for ch in t.chars if ch.code)
+            same = current_text(t)
             try:
                 out, _notes = retype_bytes(cfg, t, same, quiet=True)
                 retype_ok = "できる（同じ文言で元と同じ）" if out == data else "できる"
@@ -1073,7 +1210,7 @@ def stock_list(cfg, folder):
     for p in files:
         try:
             t = TS1(open(p, "rb").read())
-            rows.append([os.path.relpath(p, folder), "", "", t.text.replace("\n", "\\n").replace("\r", "\\n"), _type_memo(t)])
+            rows.append([os.path.relpath(p, folder), "", "", current_text(t).replace("\n", "\\n"), _type_memo(t)])
         except Exception as ex:
             rows.append([os.path.relpath(p, folder), "", "", "", f"読めません: {ex}"])
     with open(dst, "w", encoding="utf-8-sig", newline="") as f:

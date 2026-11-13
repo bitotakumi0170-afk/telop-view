@@ -237,6 +237,8 @@ class Dumper:
             t = b[p:p + 4]
             if t in (b"CSML", b"CSSL"):
                 p = self.csml(f"{path}/CSML[{i}]", p)     # CSSL（1 行もの）も同じ名前で並べる
+            elif t == b"CGRP" and self.cgrp_ok(p):
+                p = self.cgrp(f"{path}/CGRP[{i}]", p)
             else:                                         # 図形のまとまり（CGRP）など。中身は未解明
                 _, es = self.hdr(f"{path}/{t.decode('latin1')}[{i}]", p)
                 self.add(f"{path}/{t.decode('latin1')}[{i}]", p + 8, es - 8, "rest", None, "未解明（文字以外の要素）")
@@ -283,6 +285,58 @@ class Dumper:
                     p = self.mchr(f"{path}/MCHR[{i}]", p)
             else:
                 p = self.simple(cp, p)
+        return end
+
+    def cgrp_ok(self, o):
+        """図形の要素が、読める形（図形 1 つ・MFIG が要素の末尾まで）か"""
+        b = self.b
+        size = struct.unpack_from("<I", b, o + 4)[0]
+        m = b.find(b"MFIG", o, o + size)
+        return (m > 0 and b[m - 10:m - 6] == b"ESET" and struct.unpack_from("<H", b, m - 2)[0] == 1
+                and m + struct.unpack_from("<I", b, m + 4)[0] == o + size and b[m + 34:m + 38] == b"DAAR"
+                and b.find(b"SCLS", o, m) > 0)
+
+    def cgrp(self, path, o):
+        """図形の要素。文字の要素と同じ並び（位置・トランジション…・SCLS）のあとに、図形 MFIG が 1 つ"""
+        b = self.b
+        _, size = self.hdr(path, o)
+        end = o + size
+        p = self.fields(path, o + 8, o + 26, [("ver", "u16", ""), ("x", "fx", "図形の左 px"), ("y", "fx", "図形の下端 px"),
+                                               ("a", "i32", "不明 (-1)"), ("b", "u16", "不明 (0)"), ("c", "u16", "不明 (1)")])
+        counts = {}
+        m = b.find(b"MFIG", o, end)
+        while p < m - 10:
+            t = b[p:p + 4].decode("latin1")
+            k = counts.get(t, 0)
+            counts[t] = k + 1
+            cp = f"{path}/{t}[{k}]"
+            if t == "XTRS":
+                p = self.xtrs(cp, p)
+            elif t == "SCLS":
+                self.add(cp, p, 4, "(tag)", "SCLS")
+                self.add(cp, p + 4, m - 10 - (p + 4), "rest", None, "未解明（文字の SCLS とは並びが違う）")
+                p = m - 10
+            else:
+                p = self.simple(cp, p)
+        p, _n = self.eset(path + "/figs", p)
+        fp = f"{path}/MFIG[0]"
+        self.hdr(fp, m)
+        p = self.fields(fp, m + 8, m + 34, [("ver", "u16", ""), ("a", "i32", "不明 (-1)"), ("zero", "u32", ""),
+                                             ("w", "fx", "図形の幅 px"), ("h", "fx", "図形の高さ px"), ("zero2", "b8", "")])
+        _, ds = self.hdr(fp + "/DAAR", p)
+        n = struct.unpack_from("<H", b, p + 10)[0]
+        self.fields(fp + "/DAAR", p + 8, p + 12, [("ver", "u16", ""), ("count", "u16", "属性数")])
+        q = p + 12
+        for _ in range(n):
+            t = b[q:q + 4].decode("latin1")
+            q = self.adco(f"{fp}/DAAR/ADCO", q) if t == "ADCO" else self.simple(f"{fp}/DAAR/{t}", q)
+        p += ds
+        self.add(fp, p, 4, "(tag)", b[p:p + 4].decode("latin1"))
+        p += 4
+        if end - p >= 28:
+            p = self.fields(fp, p, p + 28, [("zero3", "b20", ""), ("p1", "fx", "不明（10.0。角の丸み?）"), ("p2", "u32", "不明（26。形の種類?）")])
+        if p < end:
+            self.add(fp, p, end - p, "tail", None, "未解明")
         return end
 
     def xtrs(self, path, o):

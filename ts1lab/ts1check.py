@@ -85,6 +85,13 @@ def _refs(t):
                     if not (0 <= c < len(res)) or res[c][0] not in COLOR_TAGS:
                         bad.append(f"{name} の装飾の色リソース番号 {c} が色を指していません"
                                    f"（{res[c][0] if 0 <= c < len(res) else '範囲の外'}）")
+    # 図形（座布団）の面と縁も、色を番号で指している
+    for f in t.figures():
+        for d in f["decorations"]:
+            c = d["color_resource"]
+            cref[c] = cref.get(c, 0) + 1
+            if not (0 <= c < len(res)) or res[c][0] not in COLOR_TAGS:
+                bad.append(f"図形の装飾の色リソース番号 {c} が色を指していません")
     return gref, cref, bad
 
 
@@ -101,7 +108,9 @@ def check_file(data, rebuild=True):
     except Exception as ex:
         return [(NG, f"文字の要素を読めません（{ex}）")]
     res = t.resources
-    figures = [e for e in t.elements if e[0] not in ("CSML", "CSSL")]
+    # 中身を読めない図形（読める図形からの参照は _refs が数える）
+    simple = {f["index"] for f in t.figures() if f["simple"]}
+    figures = [e for i, e in enumerate(t.elements) if e[0] not in ("CSML", "CSSL") and i not in simple]
     gref, cref, bad = _refs(t)
     out += [(NG, m) for m in bad]
     # 使用回数
@@ -170,13 +179,37 @@ def _explicit_style(t, ch):
     return tuple(sig), ch.pre_raw[18:22]
 
 
-def check_retype(template, out, text=None, clear_history=False, plain_spacing=None):
-    """型（template）と打ち替え後（out）を突き合わせる → [(重さ, 説明)]。text = 入れたはずの文言（| の区切りは除いたもの）"""
+def check_figure_resize(before, after, index):
+    """図形（座布団）の幅を変える前後を突き合わせる → [(重さ, 説明)]。
+    変わってよいのは、その図形の左位置（とトランジションの x）・幅だけ"""
+    from structure import dump
+    msgs = check_file(after)
+    if len(before) != len(after):
+        return msgs + [(NG, "図形の幅を変えたらファイルの長さが変わりました")]
+    f0 = {f"{f.path}.{f.name}": f for f in dump(before)}
+    f1 = {f"{f.path}.{f.name}": f for f in dump(after)}
+    path = f"SWRK/SLYR[0]/CGRP[{index}]"
+    allowed = {path + ".x", path + "/MFIG[0].w"} | {f"{path}/XTRS[{n}].{nm}" for n in range(8) for nm in ("x0", "x1")}
+    for key in f0:
+        if key in allowed:
+            continue
+        b = f1.get(key)
+        if b is None or f0[key].raw != b.raw:
+            msgs.append((NG, f"図形の幅のほかの所が変わっています: {key}"))
+    fa = next((f for f in TS1(after).figures() if f["index"] == index), None)
+    if not fa or not fa["simple"] or fa["w"] <= 0:
+        msgs.append((NG, "幅を変えたあとの図形を読めません"))
+    return msgs
+
+
+def check_retype(template, out, text=None, clear_history=False, plain_spacing=None, element=0):
+    """型（template）と打ち替え後（out）を突き合わせる → [(重さ, 説明)]。text = 入れたはずの文言（| の区切りは除いたもの）。
+    element = 打ち替えた文字要素が何番目か（0 始まり。ほかの要素は 1 バイトも変わらないはず）"""
     from structure import dump
     msgs = check_file(out)
     if any(lv == NG and "読めません" in m for lv, m in msgs):
         return msgs
-    t0, t1 = TS1(template), TS1(out)
+    t0, t1 = TS1(template, element), TS1(out, element)
     # ---- 文言
     if text is not None:
         want = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -188,7 +221,9 @@ def check_retype(template, out, text=None, clear_history=False, plain_spacing=No
     # ---- 項目ごとの突き合わせ（ORMP の中身と、主の文字要素の字の並びは別に見る）
     f0 = {f"{f.path}.{f.name}": f for f in dump(template)}
     f1 = {f"{f.path}.{f.name}": f for f in dump(out)}
-    main = next(f.path for f in dump(template) if "/CSML[" in f.path and f.name == "(tag+size)")
+    import re as _re
+    mains = [f.path for f in dump(template) if f.name == "(tag+size)" and _re.fullmatch(r"SWRK/SLYR\[0\]/CSML\[\d+\]", f.path)]
+    main = mains[element]
     single = t0.kind == "CSSL"
     allowed = {"TSRC.(tag+size)", "SWRK.(tag+size)", "SWRK/ORMP.(tag+size)", "SWRK/ORMP.count",
                main.rsplit("/", 1)[0] + ".(tag+size)", main + ".(tag+size)", main + "/chars.ESET",
