@@ -71,6 +71,12 @@ PRIM_CSPLINE = 3  # TT_PRIM_CSPLINE : 3次ベジェ（未確認）
 CELL = 2048  # グリフセル（tmAscent + tmDescent = 2048）
 
 
+# リソースの表（ORMP）の決まり: 10 個単位で、使っていない位置は空き枠（ORSC）。実物 7 本（見本・1 行もの・装飾サンプル 5 本）で
+# 「個数 = 使っている数を 10 の倍数に切り上げた数」「空き枠の使用回数は 0」が全部成り立つ
+ORMP_BLOCK = 10
+ORSC_EMPTY = b"ORSC" + struct.pack("<IHI", 14, 1, 0)
+
+
 @dataclass
 class Contour:
     start: tuple
@@ -696,7 +702,7 @@ class TS1:
 
     def style_runs(self):
         """書式のまとまり → [[字の番号, ...], ...]（終端は除く）。その字に効いている書式（装飾・倍率・斜体・文字サイズ・フォント・
-        縦ずらし）が直前の字と違う所で区切る。字間の違いでは区切らない（二色: [前半][１４][得点]。赤: [衝][撃プレー]）"""
+        縦ずらし）が直前の字と違う所で区切る。字間の違いでは区切らない（二色: 3 つ = [2 字][数字 2 字][2 字]。赤: 2 つ = [1 字目][残り]）"""
         cur = {}
         runs, prev = [], None
         for i, ch in enumerate(self.chars):
@@ -835,7 +841,11 @@ class TS1:
         pos = (枠の左, ベースライン)。1 行もの（CSSL）では「元の行の幅のまま左をここに置いたときの中心」を保って、
         新しい文言の幅に合わせて左位置と行の幅を書き直す"""
         b = self.data
-        keep_slots = not self.glyphs_in_order()     # グリフの間に色が挟まるファイル: リソースの番号を動かさない
+        # リソースの番号を動かさない組み直しにする場合:
+        #   ・グリフの間に色が挟まるファイル
+        #   ・要素が複数あるファイル（2 つめの文字や図形も番号でリソースを指している。主の要素しか書き直さないので、
+        #     番号がずれると、ほかの要素が別のリソースを指してしまう）
+        keep_slots = not self.glyphs_in_order() or len(self.elements) > 1
         args = dict(chars=chars, glyphs=glyphs, face_color=face_color, edge_color=edge_color, clear_history=clear_history,
                     keep_glyph_header=keep_glyph_header, edge_width=edge_width, color_order=color_order)
         pos_in = pos
@@ -845,6 +855,13 @@ class TS1:
         old_ng = len(self.glyphs)
         others = [(t, r) for t, r in self.resources if t != "RCHR"]
         shift = len(glyphs) - old_ng  # 色リソース番号のずれ
+        if shift and not keep_slots and len(self.resources) % ORMP_BLOCK == 0:
+            # VWS のリソースの表は 10 個単位で、余りは空き枠（ORSC）で埋めてある。グリフの数が変わったら末尾の空き枠を増減する
+            tail = [r for t, r in others if t == "ORSC"]
+            while others and others[-1][0] == "ORSC":
+                others.pop()
+            used = len(glyphs) + len(others)
+            others += [("ORSC", tail[0] if tail else ORSC_EMPTY)] * (-used % ORMP_BLOCK)
         if keep_slots:
             return self._rebuild_keep_slots(chars, glyphs, pos, pos_in, changed, args, clear_history, keep_glyph_header,
                                             face_color, edge_color, edge_width, color_order, _line_w)
@@ -889,12 +906,11 @@ class TS1:
                         v = i32(csml_head, r + k)
                         struct.pack_into("<i", csml_head, r + k, v + fx(dx if k in (34, 46) else dy))
 
-        decos = self.decorations()
         mchr = bytearray()
         for ch in chars:
             if "ADCO" in ch.attrs and (shift or edge_width is not None):
                 a = bytearray(ch.attrs["ADCO"])
-                for d in decos:
+                for d in self._decode_adco(ch.attrs["ADCO"]):       # 字ごとに読む（層の数が字によって違ってもよい）
                     e0 = d["offset"]
                     if shift:  # 色リソース番号をグリフ数の増減に合わせてずらす
                         struct.pack_into("<I", a, e0 + 4, u32(a, e0 + 4) + shift)
@@ -939,6 +955,48 @@ class TS1:
         c = self.off["CSML"]
         csml = b[c:self.csml_end]
         return bytes(self._assemble(omr0, ormp_chunk, csml))
+
+    def tidy_resources(self):
+        """リソースの表を VWS の決まりにそろえて組み直す（番号は動かさない）:
+          ・使用回数 = 文字と装飾から指されている数
+          ・どこからも指されていない色・字形は空き枠（ORSC）にする
+          ・末尾の空き枠を増減して 10 個単位にする
+        手で装飾を差し替えて作ったファイル（確認用など）の後始末に使う。図形つき（図形からの参照を数えられない）は対象外"""
+        if any(tag not in ("CSML", "CSSL") for tag, _o, _s in self.elements):
+            raise ValueError("図形のあるファイルは、図形からの参照を数えられないのでそろえられません")
+        gref, cref = {}, {}
+        for v in self.element_views():
+            for ch in v.chars:
+                gref[ch.glyph_index] = gref.get(ch.glyph_index, 0) + 1
+                if "ADCO" in ch.attrs:
+                    for d in v._decode_adco(ch.attrs["ADCO"]):
+                        cref[d["color_resource"]] = cref.get(d["color_resource"], 0) + 1
+        res = []
+        for i, (t, r) in enumerate(self.resources):
+            if t == "RCHR":
+                n = gref.get(i, 0)
+                if not n:
+                    res.append(("ORSC", ORSC_EMPTY))
+                elif r.usage != n:
+                    res.append(("RCHR", Glyph(r.code, r.font_id, n, r.contours, r.ascent, r.descent, r.header_raw, None, r.tag)))
+                else:
+                    res.append((t, r))
+            elif t in ("CRGB", "CGRD", "CPTN"):
+                n = cref.get(i, 0)
+                res.append((t, r[:10] + struct.pack("<H", n) + r[12:]) if n else ("ORSC", ORSC_EMPTY))
+            else:
+                res.append((t, r))
+        while res and res[-1][0] == "ORSC":
+            res.pop()
+        res += [("ORSC", ORSC_EMPTY)] * (-len(res) % ORMP_BLOCK)
+        b = self.data
+        ormp = bytearray()
+        for t, r in res:
+            ormp += r.encode(keep_header=True) if t == "RCHR" else r
+        ormp_chunk = b"ORMP" + struct.pack("<I", 12 + len(ormp)) + self.ormp_head + struct.pack("<H", len(res)) + ormp
+        om = self.off["OMR0"]
+        c = self.off["CSML"]
+        return bytes(self._assemble(b[om:om + u32(b, om + 4)], ormp_chunk, b[c:self.csml_end]))
 
     def color_targets(self, face_color=None, edge_color=None, order=COLOR_ORDER):
         """色の差し替え先 → {ORMP の添字: 新しい色のバイト列}。
@@ -1057,7 +1115,10 @@ class TS1:
                         new_index[k] = i; claimed.add(i)
                         if i not in protected:
                             res[i] = ("RCHR", g)
-                free = [i for i in mine if i not in claimed and i not in protected]
+                freed = [i for i in mine if i not in claimed and i not in protected]
+                # 入れる先: この要素が使わなくなった位置 → もとからある空き枠（ORSC）→ 末尾に足す
+                free = freed + [i for i, (t_, _r) in enumerate(res) if t_ == "ORSC"]
+                blocks = len(res) % ORMP_BLOCK == 0
                 for k, g in enumerate(glyphs):
                     if k in new_index:
                         continue
@@ -1067,8 +1128,28 @@ class TS1:
                         res.append(("RCHR", g)); i = len(res) - 1
                     new_index[k] = i
                 for i in free:
-                    res[i] = ("ORSC", b"ORSC" + struct.pack("<IHI", 14, 1, 0))
+                    if res[i][0] != "ORSC":
+                        res[i] = ("ORSC", ORSC_EMPTY)
+                if blocks:                                   # 表は 10 個単位。余りは空き枠で埋める
+                    res += [("ORSC", ORSC_EMPTY)] * (-len(res) % ORMP_BLOCK)
                 chars = [Char(ch.code, new_index[ch.glyph_index], ch.attrs, ch.attr_order, ch.pre_raw, ch.uscu) for ch in chars]
+                # 使用回数 = 全部の要素からの参照の数。ほかの要素も使っているグリフは、この要素のぶんだけ数え直す
+                mine_now, other_use = {}, {}
+                for ch in chars:
+                    mine_now[ch.glyph_index] = mine_now.get(ch.glyph_index, 0) + 1
+                old_mine = {}
+                for ch in self.chars:
+                    old_mine[ch.glyph_index] = old_mine.get(ch.glyph_index, 0) + 1
+                for i in protected:
+                    if 0 <= i < len(self.resources) and self.resources[i][0] == "RCHR":
+                        other_use[i] = self.resources[i][1].usage - old_mine.get(i, 0)
+                for i, (t_, r_) in enumerate(res):
+                    if t_ != "RCHR" or (i not in mine_now and i not in other_use):
+                        continue
+                    want = mine_now.get(i, 0) + max(other_use.get(i, 0), 0)
+                    if r_.usage != want:
+                        res[i] = ("RCHR", Glyph(r_.code, r_.font_id, want, r_.contours, r_.ascent, r_.descent,
+                                                r_.header_raw, None, r_.tag))
         new_color = self.color_targets(face_color, edge_color, color_order)
         ormp = bytearray()
         for i, (t, r) in enumerate(res):

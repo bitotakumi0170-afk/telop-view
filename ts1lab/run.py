@@ -10,6 +10,7 @@
   python run.py font-name 番号 名前    → フォント番号に名前を手で登録（PC に無いフォントを VWS の画面で確かめたとき）
   python run.py text   素材.ts1 [新しい文言] → 書式はそのまま文言だけ打ち替え（素材_打ち替え.ts1 / _確認.png）。文言を省くと入力を求める
   python run.py catalog ストックのフォルダ → 型の一覧を画像つきで見られる 型カタログ.html を作る（画像は カタログ画像 のフォルダ）
+  python run.py check ストックのフォルダ → そのフォルダの .ts1 を全部検査する（読めるか・壊れていないか・打ち替えられるか）。検査結果.csv を作る
   python run.py batch ストックのフォルダ → そのフォルダの .ts1 の一覧（打ち替え一覧.csv）を作る。Excel で「新しい文言」を書き込む
   python run.py batch 打ち替え一覧.csv → 一覧どおりにまとめて打ち替え（打ち替え結果_日時 のフォルダに .ts1 と確認 PNG、結果.csv）
   python run.py texture 素材.ts1      → 文字面に貼る模様の画像を取り出す（素材_模様<番号>_面<k>.png。値はそのまま 0〜255 の濃淡）
@@ -231,11 +232,15 @@ def resolve_font(cfg, fid, ts1, force=False):
                     _find_sibling(e, ts1, fid)
             elif "sibling" not in e:
                 _find_sibling(e, ts1, fid)          # 前に探したときは、この探し方がまだ無かった
-            elif e.get("sibling") and (e["sibling"].get("others") or len(gdiglyph.ref_glyphs(ts1, fid)) > e["sibling"].get("chars", 0)):
+            elif e.get("sibling") and (e["sibling"].get("others") or len(gdiglyph.ref_glyphs(ts1, fid)) > e["sibling"].get("chars", 0)
+                                       or (not e["sibling"].get("ascii_ok")
+                                           and any(0x20 < g.code < 0x7F for g in gdiglyph.ref_glyphs(ts1, fid)))):
                 # 候補が複数残っているか、前より字の多い .ts1 → 前の候補だけを確かめ直す（絞れる・縦位置が確かになる）
                 old = e["sibling"]
                 if not _find_sibling(e, ts1, fid, only=[old["face"]] + list(old.get("others", []))):
                     e["sibling"] = old
+                elif old.get("ascii_ok"):
+                    e["sibling"]["ascii_ok"] = True
     except Exception as ex:
         print(f"  ※ Windows のフォントとの照合はできませんでした（{ex}）")
     if not e:
@@ -268,6 +273,9 @@ def _find_sibling(e, ts1, fid, only=None):
     sib = {k: h[k] for k in ("face", "weight", "italic", "charset", "y_shift", "flip", "dev", "format", "ts1_format")}
     sib["postscript"] = h.get("postscript")
     sib["chars"] = len(gdiglyph.ref_glyphs(ts1, fid))
+    # 半角の英数字も一致を確かめたか（照合した字の中に半角の字があった）
+    if any(0x20 < g.code < 0x7F for g in gdiglyph.ref_glyphs(ts1, fid)):
+        sib["ascii_ok"] = True
     others = [x["face"] for x in hits[1:] if x["face"] != h["face"]]
     if others:
         sib["others"] = others
@@ -433,6 +441,10 @@ def glyph_source(cfg, fid, e, ts1=None, quiet=False):
                 src = gdiglyph.GdiGlyphSource(sb["face"], int(sb["y_shift"]), int(sb.get("weight", 0)),
                                               int(sb.get("charset", gdiglyph.SHIFTJIS_CHARSET)), bool(sb.get("italic")),
                                               flip=bool(sb.get("flip")))
+                # 半角の英数字（U+0020〜007E）は、形式が違うと字幅も形も違うことがある（OpenType 版 Pro は欧文が
+                # プロポーショナル、TrueType 版 FTT は半角の固定幅）。その .ts1 に半角の字があって一致を確かめたときだけ使う
+                if not sb.get("ascii_ok"):
+                    src.no_halfwidth = f"{sb.get('format', '別形式')} 版の「{sb['face']}」"
                 if not quiet:
                     print(f"  字形の作り方: Windows の「{sb['face']}」（同じ書体の別形式）から作成。"
                           f"元からある字とは点の打ち方が違いますが、形の差は 2048 分の {sb['dev']} 以内です")
@@ -646,7 +658,7 @@ def retype_bytes(cfg, t, text, quiet=False):
     say = (lambda *a: None) if quiet else print
     notes = []
     text = text.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
-    # 色や大きさが途中で変わる型: 「前半|１４|得点」のように | で区切ると、区切りごとに雛形のまとまりの書式を当てる
+    # 色や大きさが途中で変わる型: 「あい|１２|うえ」のように | で区切ると、区切りごとに雛形のまとまりの書式を当てる
     runs = t.style_runs()
     segments = None
     if len(runs) > 1 and "|" in text:
@@ -670,6 +682,21 @@ def retype_bytes(cfg, t, text, quiet=False):
         font = glyph_source(cfg, t.font_id, e, t, quiet=quiet)
     if font is not None:
         if need:
+            # フォントに無い字を黙って作らない（GDI は無い字に「豆腐」や空の字形を返す。そのまま納品物に入ってしまう）
+            wide = [c for c in need if ord(c) > 0xFFFF]
+            if wide:
+                raise RuntimeError(f"この字は打てません: {''.join(wide)}（「𠮷」のような、文字コードが 4 バイトになる字。"
+                                   "VWS がこの種類の字をどう持つかが分かっていません。VWS で打った .ts1 があれば調べられます）")
+            lack = [c for c in need if hasattr(font, "has") and not font.has(ord(c))]
+            if lack:
+                raise RuntimeError(f"この書体に無い字です: {''.join(lack)}（別の字に置き換えるか、その字を持つ型を使ってください）")
+            half = [c for c in need if 0x20 <= ord(c) <= 0x7E]
+            if half and getattr(font, "no_halfwidth", False):
+                shown = "".join(half).replace(" ", "（半角の空白）")
+                raise RuntimeError(
+                    f"半角の英数字・記号は作れません: {shown}。この型の書体は、PC にあるのが別形式（{font.no_halfwidth}）で、"
+                    "半角の英数字だけは字幅も形も違います（例: 半角の 0 の幅が 1413 と 1024）。"
+                    "全角（０１２ＡＢＣ）で書くか、VWS と同じ形式のフォントを PC に入れてください")
             say(f"  元の .ts1 に無い {len(need)} 文字はフォントから作ります: {''.join(need)}")
             notes.append(f"フォントから作った字: {''.join(need)}")
     elif need:
@@ -680,9 +707,31 @@ def retype_bytes(cfg, t, text, quiet=False):
     chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True, segments=segments)
     out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
     t2 = TS1(out)
+    # ---- 納品前の検査: 壊れていないか、文字のほかの所が型と変わっていないか。NG なら .ts1 を出さない
+    import ts1check
+    found = ts1check.check_retype(t.data, out, text, clear_history=cfg.get("clear_history", False))
+    bad = [m for lv, m in found if lv == ts1check.NG]
+    if bad:
+        raise RuntimeError("納品前の検査で止めました（この .ts1 は出していません）: " + " / ".join(bad[:4])
+                           + (f" ほか {len(bad) - 4} 件" if len(bad) > 4 else ""))
+    notes += [m for lv, m in found if lv == ts1check.WARN]
     width = max(len(line) for line in text.split("\n")) * t2.char_size[0]
     if t2.kind == "CSML" and width > t2.box[0]:      # 1 行もの（CSSL）は枠が無い（行の幅が文言に合わせて変わる）
         notes.append(f"文字の幅 {width:g}px が枠の幅 {t2.box[0]:g}px を超えています（VWS で左右がはみ出すかもしれません）")
+    # ---- 画面からのはみ出し（1 行ものは文言が長いと左右に伸びる）
+    try:
+        if len(t.elements) == 1:
+            notes += ts1check.screen_overflow(t2.ofri_bbox, t.ofri_bbox)
+        else:                # 要素が複数: 描画範囲（OFRI）は書き直していないので、主の文字の字形の範囲で見る
+            import vwsrender
+            notes += ts1check.screen_overflow(vwsrender.real_bbox(t2), vwsrender.real_bbox(t))
+    except Exception:
+        pass
+    # ---- 普通の型で、型のほうが字ごとに字間を詰めてある（手詰め）とき: 新しい文言には持ち越さない
+    if t.is_plain():
+        sp = [v for k, v in enumerate(t.spacings()[1:], start=1) if t.chars[k].code]
+        if sp and any(abs(v - sp[0]) > 1e-6 for v in sp):
+            notes.append(f"型は字ごとに字間を変えてあります（{min(sp):g}〜{max(sp):g}px の手詰め）。打ち替えた文言は字間 0 で組んでいます")
     # 装飾つきの型の注意
     if not t.is_plain():
         per = t.decorations_per_char()
@@ -834,7 +883,8 @@ def catalog(cfg, folder):
         thumb_rel = f"{CATALOG_IMG}/{key}.png"
         thumb = os.path.join(img_dir, key + ".png")
         try:
-            t = TS1(open(path, "rb").read())
+            data = open(path, "rb").read()
+            t = TS1(data)
         except Exception as ex:
             n_ng += 1
             cards.append({"rel": rel, "error": str(ex)})
@@ -863,11 +913,15 @@ def catalog(cfg, folder):
         # 新しい字を打てるか（その書体が PC にあるか）
         e = font_for_id(cfg, t.font_id, t)
         font_name = font_status(e)[0] if e else "不明"
-        can_new = False
+        can_new, no_half = False, False
         try:
-            can_new = bool(e) and glyph_source(cfg, t.font_id, e, t, quiet=True) is not None
+            src_ = glyph_source(cfg, t.font_id, e, t, quiet=True) if e else None
+            can_new = src_ is not None
+            no_half = bool(getattr(src_, "no_halfwidth", False))
         except Exception:
             can_new = False
+        import ts1check
+        found = ts1check.check_file(data)
         runs = t.style_runs()
         split = "|".join("".join(t.chars[i].char for i in r) for r in runs) if len(runs) > 1 else ""
         chars = "".join(sorted({ch.char for ch in t.chars if ch.code and ch.code not in (0x0A, 0x0D)}))
@@ -876,7 +930,8 @@ def catalog(cfg, folder):
             "memo": _type_memo(t).split(" / 色や大きさが途中で変わる")[0], "split": split, "size": f"{t.char_size[0]:g}",
             "multi": len(t.elements) > 1,
             "font": f"{font_name}（番号 {t.font_id}）", "can_new": can_new, "chars": chars,
-            "condense": t.h_condense() != 1.0,
+            "condense": t.h_condense() != 1.0, "no_half": no_half,
+            "check_ng": " / ".join(m for lv, m in found if lv == ts1check.NG),
         })
         print(f"  OK  {rel}（{how}）")
     E = html.escape
@@ -918,6 +973,10 @@ def catalog(cfg, folder):
             tags.append('<span class="tag warn">途中で色や大きさが変わる</span>')
         if c["condense"]:
             tags.append('<span class="tag">字を横に縮める型</span>')
+        if c["no_half"]:
+            tags.append('<span class="tag warn">半角の英数字は足せない（全角で書く）</span>')
+        if c["check_ng"]:
+            tags.append(f'<span class="tag ng" title="{E(c["check_ng"])}">検査 NG（打ち替えに使わない）</span>')
         if c["multi"]:
             tags.append('<span class="tag warn">ほかの文字や図形も入っている（替わるのは最初の文字だけ）</span>')
         pic = (f'<img src="{E(c["thumb"])}" alt="{E(c["text"])}" loading="lazy">' if c["thumb"] else "画像なし")
@@ -945,6 +1004,60 @@ def catalog(cfg, folder):
             os.remove(os.path.join(img_dir, fn))
     print(f"\n  型 {len(files) - n_ng} 本のカタログを作りました → {dst}")
     print("  ブラウザで開いて型を選び、打ち替え一覧.csv に「型」と「新しい文言」を書いて 5 の bat に入れてください")
+
+
+CHECK_NAME = "検査結果.csv"
+
+
+def stock_check(cfg, target):
+    """ストックの .ts1 を検査する: 読めるか・壊れていないか・書き直しても同じか・新しい字を打てるか。
+    フォルダなら中の .ts1 を全部（検査結果.csv も作る）、.ts1 ならその 1 本"""
+    import csv
+    import ts1check
+    files = _stock_files(target) if os.path.isdir(target) else [target]
+    if not files:
+        raise RuntimeError(f"このフォルダに .ts1 がありません: {target}")
+    base = target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
+    rows = [["型", "結果", "打ち替え", "書体", "新しい字", "要素", "検査の内容"]]
+    n = {"OK": 0, "注意": 0, "NG": 0}
+    for path in files:
+        rel = os.path.relpath(path, base)
+        data = open(path, "rb").read()
+        found = ts1check.check_file(data)
+        level = "NG" if any(lv == ts1check.NG for lv, _ in found) else ("注意" if found else "OK")
+        font = retype_ok = can_new = elems = ""
+        try:
+            t = TS1(data)
+            elems = "・".join({"CSML": "文字（枠つき）", "CSSL": "文字（1 行）", "CGRP": "図形"}.get(tg, tg) for tg, _o, _s in t.elements)
+            e = font_for_id(cfg, t.font_id, t)
+            name_, how_ = font_status(e) if e else ("不明", "")
+            font = f"{name_}（番号 {t.font_id}）" + ("・確定" if e and e.get("exact") else "・ほぼ確定" if e and e.get("sibling") else "")
+            try:
+                can_new = "打てる" if e and glyph_source(cfg, t.font_id, e, t, quiet=True) is not None else "元にある字だけ"
+            except Exception:
+                can_new = "元にある字だけ"
+            # 同じ文言で打ち替えてみる（打ち替えの道が通るか。装飾つきの型は元とバイト単位で同じになるはず）
+            runs = t.style_runs()
+            same = "|".join("".join(t.chars[i].char for i in rr) for rr in runs) if len(runs) > 1 else \
+                "".join("\n" if ch.code in (0x0A, 0x0D) else ch.char for ch in t.chars if ch.code)
+            try:
+                out, _notes = retype_bytes(cfg, t, same, quiet=True)
+                retype_ok = "できる（同じ文言で元と同じ）" if out == data else "できる"
+            except Exception as ex:
+                retype_ok = f"できない: {ex}"
+                level = "NG" if level == "OK" else level
+        except Exception as ex:
+            retype_ok = f"読めない: {ex}"
+        n[level] += 1
+        detail = ts1check.summary(found) if found else ""
+        rows.append([rel, level, retype_ok, font, can_new, elems, detail])
+        print(f"  {level:<3} {rel}  打ち替え: {retype_ok[:40]} / {font} / 新しい字: {can_new}" + (f"\n      {detail[:300]}" if detail else ""))
+    if os.path.isdir(target):
+        dst = os.path.join(target, CHECK_NAME)
+        with open(dst, "w", encoding="utf-8-sig", newline="") as f:
+            csv.writer(f).writerows(rows)
+        print(f"\n  {len(files)} 本を検査しました（OK {n['OK']} / 注意 {n['注意']} / NG {n['NG']}）→ {dst}")
+    return n["NG"]
 
 
 def stock_list(cfg, folder):
@@ -990,7 +1103,7 @@ def batch(cfg, path):
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     out_dir = os.path.join(folder, f"打ち替え結果_{stamp}")
     os.makedirs(out_dir, exist_ok=True)
-    cache, used, result = {}, set(), [["行", "型", "新しい文言", "結果", "出力", "注意"]]
+    cache, used, result = {}, set(), [["行", "型", "新しい文言", "結果", "出力", "検査", "注意"]]
     ok = ng = 0
     for i, r in enumerate(rows[1:], start=2):
         get = lambda name: (r[col[name]].strip() if col[name] is not None and col[name] < len(r) else "")
@@ -1022,14 +1135,15 @@ def batch(cfg, path):
             ok += 1
             warn = [n for n in notes if not n.startswith("フォントから作った字")]
             print(f"  OK  {label} → {base}.ts1" + (f"\n      ※ " + "\n      ※ ".join(warn) if warn else ""))
-            result.append([i, typ, text, "OK", base + ".ts1", " / ".join(notes)])
+            result.append([i, typ, text, "OK", base + ".ts1", "通過", " / ".join(notes)])
         except Exception as ex:
             ng += 1
             print(f"  NG  {label}: {ex}")
-            result.append([i, typ, text, "NG", "", str(ex)])
+            result.append([i, typ, text, "NG", "", "止めた" if "納品前の検査" in str(ex) else "", str(ex)])
     with open(os.path.join(out_dir, "結果.csv"), "w", encoding="utf-8-sig", newline="") as f:
         csv.writer(f).writerows(result)
     print(f"\n  できた {ok} 本 / できなかった {ng} 本 → {out_dir}")
+    print("  どの .ts1 も納品前の検査（壊れていないか・文字のほかの所が型と同じか）を通っています")
     print("  確認 PNG で文言と見た目を見てから納品してください（装飾つきの型は、最初の 1 回は VWS でも確かめてください）")
 
 
@@ -1199,6 +1313,13 @@ def main():
             return 1
         gradient_set(cfg, files[0], files[1], files[2], files[3] if len(files) > 3 else None)
         return 0
+    if cmd == "check":
+        try:
+            return 1 if sum(stock_check(cfg, p) for p in files) else 0
+        except Exception as e:
+            print("  エラー:", e)
+            traceback.print_exc()
+            return 1
     if cmd == "catalog":
         try:
             catalog(cfg, files[0])
