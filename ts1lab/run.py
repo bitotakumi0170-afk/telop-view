@@ -9,6 +9,7 @@
                                         （to-ps / text / info でも自動で特定する。これは結果を詳しく見たいとき・候補を出したいとき用）
   python run.py font-name 番号 名前    → フォント番号に名前を手で登録（PC に無いフォントを VWS の画面で確かめたとき）
   python run.py text   素材.ts1 [新しい文言] → 書式はそのまま文言だけ打ち替え（素材_打ち替え.ts1 / _確認.png）。文言を省くと入力を求める
+  python run.py catalog ストックのフォルダ → 型の一覧を画像つきで見られる 型カタログ.html を作る（画像は カタログ画像 のフォルダ）
   python run.py batch ストックのフォルダ → そのフォルダの .ts1 の一覧（打ち替え一覧.csv）を作る。Excel で「新しい文言」を書き込む
   python run.py batch 打ち替え一覧.csv → 一覧どおりにまとめて打ち替え（打ち替え結果_日時 のフォルダに .ts1 と確認 PNG、結果.csv）
   python run.py texture 素材.ts1      → 文字面に貼る模様の画像を取り出す（素材_模様<番号>_面<k>.png。値はそのまま 0〜255 の濃淡）
@@ -693,6 +694,178 @@ def _type_memo(t):
     return " / ".join(memo)
 
 
+CATALOG_HTML = "型カタログ.html"
+CATALOG_IMG = "カタログ画像"
+
+
+def _thumb(im, max_w=560, max_h=200):
+    """透過の RGBA 画像 → 字のある所だけ切り出し、暗い市松の上に重ねた縮小画像（無ければ None）"""
+    from PIL import Image
+    bb = im.getbbox()
+    if not bb:
+        return None
+    m = 12
+    box = (max(bb[0] - m, 0), max(bb[1] - m, 0), min(bb[2] + m, im.width), min(bb[3] + m, im.height))
+    c = im.crop(box)
+    w, h = c.size
+    bg = Image.new("RGBA", (w, h), (58, 62, 70, 255))
+    q = 16
+    dark = Image.new("RGBA", (q, q), (46, 50, 58, 255))
+    for y in range(0, h, q):
+        for x in range((y // q % 2) * q, w, 2 * q):
+            bg.paste(dark, (x, y))
+    bg.alpha_composite(c)
+    bg.thumbnail((max_w, max_h), Image.LANCZOS)
+    return bg.convert("RGB")
+
+
+def _vws_png_near(path):
+    """その .ts1 の VWS の書き出し PNG が隣にあれば返す（「名前.png」「[名前].png」「[名前．ts1].png」）"""
+    import unicodedata
+    d, stem = os.path.dirname(path), os.path.splitext(os.path.basename(path))[0]
+    want = {stem + ".png", f"[{stem}].png", f"[{stem}．ts1].png", f"[{stem}.ts1].png"}
+    try:
+        for fn in os.listdir(d):
+            if unicodedata.normalize("NFC", fn) in want:
+                return os.path.join(d, fn)
+    except OSError:
+        pass
+    return None
+
+
+def catalog(cfg, folder):
+    """ストックの .ts1 を、画像・文言・使い方のメモつきの 1 枚の HTML にする（Photoshop も VWS も使わない）。
+    画像は、隣に VWS の書き出し PNG があればそれ、無ければこの道具の再現（装飾つきは近似）"""
+    import datetime
+    import hashlib
+    import html
+    from PIL import Image
+    from psdbridge import ts1_to_png
+    files = _stock_files(folder)
+    if not files:
+        raise RuntimeError(f"このフォルダに .ts1 がありません: {folder}")
+    img_dir = os.path.join(folder, CATALOG_IMG)
+    os.makedirs(img_dir, exist_ok=True)
+    cards, n_ng = [], 0
+    for path in files:
+        rel = os.path.relpath(path, folder)
+        key = hashlib.md5(rel.encode("utf-8")).hexdigest()[:10]
+        thumb_rel = f"{CATALOG_IMG}/{key}.png"
+        thumb = os.path.join(img_dir, key + ".png")
+        try:
+            t = TS1(open(path, "rb").read())
+        except Exception as ex:
+            n_ng += 1
+            cards.append({"rel": rel, "error": str(ex)})
+            print(f"  NG  {rel}: 読めません（{ex}）")
+            continue
+        vws_png = _vws_png_near(path)
+        src_time = max(os.path.getmtime(path), os.path.getmtime(vws_png) if vws_png else 0)
+        how = "VWS の書き出し" if vws_png else ("再現" if t.is_plain() else "再現（装飾は近似）")
+        if not (os.path.exists(thumb) and os.path.getmtime(thumb) >= src_time):
+            try:
+                if vws_png:
+                    im = Image.open(vws_png).convert("RGBA")
+                else:
+                    tmp = os.path.join(img_dir, key + "_full.png")
+                    ts1_to_png(t, tmp)
+                    im = Image.open(tmp).convert("RGBA")
+                    im.load()
+                    os.remove(tmp)
+                th = _thumb(im)
+                if th is None:
+                    raise RuntimeError("画像に何も描かれていません")
+                th.save(thumb)
+            except Exception as ex:
+                thumb_rel = None
+                how = f"画像を作れませんでした（{ex}）"
+        # 新しい字を打てるか（その書体が PC にあるか）
+        e = font_for_id(cfg, t.font_id, t)
+        font_name = font_status(e)[0] if e else "不明"
+        can_new = False
+        try:
+            can_new = bool(e) and glyph_source(cfg, t.font_id, e, t, quiet=True) is not None
+        except Exception:
+            can_new = False
+        runs = t.style_runs()
+        split = "|".join("".join(t.chars[i].char for i in r) for r in runs) if len(runs) > 1 else ""
+        chars = "".join(sorted({ch.char for ch in t.chars if ch.code and ch.code not in (0x0A, 0x0D)}))
+        cards.append({
+            "rel": rel, "thumb": thumb_rel, "how": how, "text": t.text.replace("\r", "\n"),
+            "memo": _type_memo(t).split(" / 色や大きさが途中で変わる")[0], "split": split, "size": f"{t.char_size[0]:g}",
+            "multi": len(t.elements) > 1,
+            "font": f"{font_name}（番号 {t.font_id}）", "can_new": can_new, "chars": chars,
+            "condense": t.h_condense() != 1.0,
+        })
+        print(f"  OK  {rel}（{how}）")
+    E = html.escape
+    out = ["<!doctype html>", '<html lang="ja"><head><meta charset="utf-8">',
+           '<meta name="viewport" content="width=device-width, initial-scale=1">',
+           "<title>型カタログ</title>", "<style>",
+           ":root{color-scheme:dark}",
+           "body{margin:0;padding:20px 16px 48px;background:#1d2026;color:#e8eaee;font-family:'Yu Gothic UI','Meiryo',sans-serif;line-height:1.6}",
+           "h1{font-size:20px;margin:0 0 4px}",
+           ".lead{color:#a9afbb;font-size:13px;margin:0 0 14px}",
+           "#q{width:100%;max-width:480px;padding:8px 10px;border-radius:6px;border:1px solid #454b58;background:#262a32;color:#e8eaee;font-size:14px}",
+           ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:16px}",
+           ".card{background:#262a32;border:1px solid #363b47;border-radius:8px;padding:12px;min-width:0}",
+           ".pic{background:#3a3e46;border-radius:6px;min-height:72px;display:flex;align-items:center;justify-content:center;overflow:hidden}",
+           ".pic img{max-width:100%;height:auto;display:block}",
+           ".name{font-weight:700;font-size:14px;margin:10px 0 2px;word-break:break-all}",
+           ".txt{font-size:15px;margin:2px 0 8px;white-space:pre-wrap;word-break:break-all}",
+           "dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0;font-size:12.5px;color:#c3c8d2}",
+           "dt{color:#8f96a3;white-space:nowrap}dd{margin:0;word-break:break-all}",
+           ".tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:10px;margin:0 4px 4px 0;background:#39404d;color:#d5d9e1}",
+           ".ok{background:#1f4a35;color:#bfe8d0}.ng{background:#5a2f2f;color:#f2c9c9}.warn{background:#554620;color:#f1dfae}",
+           "code{background:#1d2026;border:1px solid #363b47;border-radius:4px;padding:0 5px;font-family:Consolas,'MS Gothic',monospace;font-size:12.5px}",
+           ".hide{display:none}",
+           "</style></head><body>",
+           "<h1>型カタログ</h1>",
+           f'<p class="lead">ストックの .ts1 {len(files)} 本（{datetime.datetime.now():%Y-%m-%d %H:%M} 作成）。'
+           "使う型の「型の名前」を 打ち替え一覧.csv の「型」に書き、「新しい文言」を入れて、5 の bat に入れると .ts1 ができます。</p>",
+           '<input id="q" type="search" placeholder="型の名前・文言・メモで絞り込み" aria-label="絞り込み">',
+           '<div class="grid">']
+    for c in cards:
+        if "error" in c:
+            out.append(f'<div class="card" data-k="{E(c["rel"])}"><div class="name">{E(c["rel"])}</div>'
+                       f'<span class="tag ng">読めません</span><div class="txt">{E(c["error"])}</div></div>')
+            continue
+        tags = []
+        tags.append('<span class="tag ok">新しい字も打てる</span>' if c["can_new"]
+                    else '<span class="tag ng">元にある字だけ（書体が PC に無い）</span>')
+        if c["split"]:
+            tags.append('<span class="tag warn">途中で色や大きさが変わる</span>')
+        if c["condense"]:
+            tags.append('<span class="tag">字を横に縮める型</span>')
+        if c["multi"]:
+            tags.append('<span class="tag warn">ほかの文字や図形も入っている（替わるのは最初の文字だけ）</span>')
+        pic = (f'<img src="{E(c["thumb"])}" alt="{E(c["text"])}" loading="lazy">' if c["thumb"] else "画像なし")
+        rows = [("文字サイズ", E(c["size"])), ("書体", E(c["font"])), ("型", E(c["memo"])), ("画像", E(c["how"]))]
+        if c["split"]:
+            rows.insert(0, ("区切り", f'<code>{E(c["split"])}</code> のように <code>|</code> で区切って書く'))
+        if not c["can_new"]:
+            rows.append(("使える字", E(c["chars"])))
+        k = E(" ".join([c["rel"], c["text"], c["memo"], c["font"]]))
+        out.append(f'<div class="card" data-k="{k}"><div class="pic">{pic}</div>'
+                   f'<div class="name">{E(c["rel"])}</div><div class="txt">{E(c["text"])}</div>'
+                   f'<div>{"".join(tags)}</div><dl>' + "".join(f"<dt>{a}</dt><dd>{b}</dd>" for a, b in rows) + "</dl></div>")
+    out += ["</div>", "<script>",
+            "const q=document.getElementById('q'),cs=[...document.querySelectorAll('.card')];",
+            "q.addEventListener('input',()=>{const w=q.value.trim().toLowerCase().split(/\\s+/).filter(Boolean);"
+            "cs.forEach(c=>{const k=c.dataset.k.toLowerCase();c.classList.toggle('hide',!w.every(x=>k.includes(x)))})});",
+            "</script></body></html>"]
+    dst = os.path.join(folder, CATALOG_HTML)
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    # いらなくなった画像を消す（型が減ったとき）
+    keep = {os.path.basename(c["thumb"]) for c in cards if c.get("thumb")}
+    for fn in os.listdir(img_dir):
+        if fn.endswith(".png") and fn not in keep:
+            os.remove(os.path.join(img_dir, fn))
+    print(f"\n  型 {len(files) - n_ng} 本のカタログを作りました → {dst}")
+    print("  ブラウザで開いて型を選び、打ち替え一覧.csv に「型」と「新しい文言」を書いて 5 の bat に入れてください")
+
+
 def stock_list(cfg, folder):
     """ストックのフォルダの .ts1 を一覧にして 打ち替え一覧.csv を作る（Excel で開ける UTF-8 BOM 付き）"""
     import csv
@@ -944,6 +1117,14 @@ def main():
             print("使い方: python run.py gradient 素材.ts1 番号 色1,色2,... [位置1,位置2,...]")
             return 1
         gradient_set(cfg, files[0], files[1], files[2], files[3] if len(files) > 3 else None)
+        return 0
+    if cmd == "catalog":
+        try:
+            catalog(cfg, files[0])
+        except Exception as e:
+            print("  エラー:", e)
+            traceback.print_exc()
+            return 1
         return 0
     if cmd == "batch":
         try:
