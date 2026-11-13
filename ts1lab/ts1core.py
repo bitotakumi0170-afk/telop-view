@@ -669,6 +669,22 @@ class TS1:
             out.append(cur)
         return out
 
+    def slants(self):
+        """各文字の斜体の角度（度。ASLP の 1 つめ）。無い文字は直前の値を引き継ぐ。
+        VWS は「縦横に拡大した座標」を x − y × tan(角度) で傾ける（赤・二色の文字面の PNG と 1 画素も違わない）"""
+        cur, out = 0.0, []
+        for ch in self.chars:
+            p = ch.attrs.get("ASLP")
+            if p is not None:
+                cur = i32(p, 2) / FIX
+            out.append(cur)
+        return out
+
+    def baseline_shifts(self):
+        """各文字のベースラインを下げる量 px（MCHR の +30、24.8 固定小数点。下向きが正）。
+        二色の大きい数字（14.0）が 14px 下に描かれる。引き継ぎは無い（字ごとの値）"""
+        return [i32(ch.pre_raw, 18) / FIX for ch in self.chars]
+
     def layout_fx(self, newline_code=0x0D):
         """VWS と同じ整数の計算で字を並べる → [(Char, Glyph, x 原点（1/256px の整数）, ベースライン y, scale)]
         scale は 2048 単位 → px の倍率（Scale: float。横と縦が違うときは .sx / .sy を見る）

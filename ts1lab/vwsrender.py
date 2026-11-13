@@ -58,7 +58,7 @@ def _subdivide(p0, c, p1, out, depth=0):
     _subdivide(r, q1, p1, out, depth + 1)
 
 
-def glyph_polys8(glyph, sx8, sy8=None, fx=0, fy=0):
+def glyph_polys8(glyph, sx8, sy8=None, fx=0, fy=0, shear=0.0):
     """字形の輪郭 → 8 倍格子の整数の多角形（字の原点からの相対）。sx8, sy8 = 2048 単位 → 8 倍格子の倍率（横・縦）
     fx, fy = 字の原点（8 倍格子）が画素の中のどこにあるか（0〜7）。VWS は「画素の中の位置 + 座標 × 倍率」を足してから
     切り捨てる（0 方向）ので、原点が画素の境目でないとき（y = 607.5 など）は、原点のすぐ上・すぐ左の点が 1/8px ずれる
@@ -66,7 +66,8 @@ def glyph_polys8(glyph, sx8, sy8=None, fx=0, fy=0):
     sy8 = sx8 if sy8 is None else sy8
     # 点も、曲線を割るときの中点も「原点のある画素の左上」を基準にした座標で整数にする（中点の切り捨ては符号で向きが変わるため）。
     # 最後に字の原点からの相対に戻す
-    P = lambda p: (int(fx + p[0] * sx8), int(fy + p[1] * sy8))
+    # 斜体: 拡大したあとの座標で x − y × tan(角度)（y は下向き正なので、上の点ほど右へ）。
+    P = lambda p: (int(fx + p[0] * sx8 - p[1] * sy8 * shear), int(fy + p[1] * sy8))
     polys = []
     for c in glyph.contours:
         cur = c.start
@@ -179,16 +180,32 @@ def layout_fx(ts1, newline_code=0x0D):
     return ts1.layout_fx(newline_code)
 
 
+def _char_extras(ts1):
+    """id(Char) → (tan(斜体の角度), ベースラインを下げる量 px)"""
+    sl = ts1.slants() if hasattr(ts1, "slants") else [0.0] * len(ts1.chars)
+    bs = ts1.baseline_shifts() if hasattr(ts1, "baseline_shifts") else [0.0] * len(ts1.chars)
+    return {id(ch): (math.tan(math.radians(a)) if a else 0.0, d) for ch, a, d in zip(ts1.chars, sl, bs)}
+
+
+def _sheared_left(g, sx, sy, shear):
+    """傾けたあとの輪郭データの点（制御点も含む）の左端 px（字の原点から）"""
+    pts = [p for c in g.contours for p in [c.start] + [q for _, qs in c.segs for q in qs]]
+    return min(p[0] * sx - p[1] * sy * shear for p in pts) if pts else 0.0
+
+
 def face_counts(ts1, canvas=(1920, 1080)):
     """文字面の量 k_f (0..128) をキャンバス全体の int 配列で返す"""
     W, H = canvas
     kf = np.zeros((H, W), np.int32)
+    extra = _char_extras(ts1)
     for ch, g, x_fx, y, sc in layout_fx(ts1):
         if not g.contours:
             continue
+        shear, dy = extra[id(ch)]
+        y = y + dy                                              # 字ごとのベースラインの下げ（MCHR +30）
         g8x = x_fx * SS // FX                                   # 1/256px の整数 → 8 倍格子へ切り捨て
         g8y = int(math.floor(y * SS))                           # 縦も切り捨て（横と同じ。40_縦の端数で確認）
-        polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS, g8x % SS, g8y % SS)
+        polys = glyph_polys8(g, getattr(sc, "sx", sc) * SS, getattr(sc, "sy", sc) * SS, g8x % SS, g8y % SS, shear)
         xs = [p[0] for pl in polys for p in pl]
         ys = [p[1] for pl in polys for p in pl]
         # 字ごとの窓（画素単位）
@@ -212,7 +229,7 @@ def face_counts(ts1, canvas=(1920, 1080)):
         first_row = int(math.floor(top_px - 0.5))
         if first_row - py0 > 0:
             k[:first_row - py0] = 0
-        left_px = x_fx / FX + g.bbox()[0] * sx_
+        left_px = x_fx / FX + (_sheared_left(g, sx_, sy_, shear) if shear else g.bbox()[0] * sx_)
         first_col = int(math.floor(left_px))
         if first_col - px0 > 0:
             k[:, :first_col - px0] = 0
@@ -229,13 +246,21 @@ def real_bbox(ts1):
     """字形の範囲（輪郭データの点。制御点も含む）を実数のまま画面に置いたときの外接範囲 (L, T, R, B)。無ければ None"""
     L = T = float("inf")
     R = B = float("-inf")
+    extra = _char_extras(ts1)
     for ch, g, x_fx, y, sc in layout_fx(ts1):
         if not g.contours:
             continue
         sx, sy = getattr(sc, "sx", sc), getattr(sc, "sy", sc)
+        shear, dy = extra[id(ch)]
+        y = y + dy
         l, top, r, btm = g.bbox()          # y は上向き正
         xx = x_fx / FX
-        L, R = min(L, xx + l * sx), max(R, xx + r * sx)
+        if shear:
+            pts = [p for c in g.contours for p in [c.start] + [q for _, qs in c.segs for q in qs]]
+            xs = [p[0] * sx - p[1] * sy * shear for p in pts]
+            L, R = min(L, xx + min(xs)), max(R, xx + max(xs))
+        else:
+            L, R = min(L, xx + l * sx), max(R, xx + r * sx)
         T, B = min(T, y - top * sy), max(B, y - btm * sy)
     return None if L == float("inf") else (L, T, R, B)
 
