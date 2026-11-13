@@ -137,6 +137,12 @@ class GdiFont:
         """頼んだ書体が実際に選ばれたか"""
         return self.face == self.requested
 
+    def outline_format(self):
+        """輪郭の形式: "OpenType"（CFF = 3 次曲線。.otf）か "TrueType"（2 次曲線。.ttf / .ttc）。
+        同じ書体でも形式が違うと、GDI が返す輪郭の向きと点の打ち方が違う（形は同じ）"""
+        n = self.g.GetFontData(self.dc, 0x20464643, 0, None, 0)      # 'CFF '
+        return "OpenType" if n not in (GDI_ERROR, 0) else "TrueType"
+
     def names(self):
         """フォントの name テーブルから {"postscript", "family", "full"} を読む（無ければ空）"""
         tag = 0x656D616E      # 'name'
@@ -224,8 +230,10 @@ def _tdiv2(a, b):
     return int((a + b) / 2)
 
 
-def convert(native, y_shift):
-    """GDI の輪郭 → VWS の輪郭（Contour のリスト）"""
+def convert(native, y_shift, flip=False):
+    """GDI の輪郭 → VWS の輪郭（Contour のリスト）。
+    flip = 輪郭を逆回りにしない（GDI の向きのまま書く）。TrueType 版のフォントは OpenType 版と輪郭の向きが逆なので、
+    OpenType 版の字が入っている .ts1 に TrueType 版から作った字を足すとき、向きをそろえるのに使う"""
     def T(p):
         return (math.floor(p[0]), math.floor(-p[1] - y_shift))
 
@@ -245,6 +253,21 @@ def convert(native, y_shift):
                     items.append((c, cur))
                     cur = e
         out = []
+        if flip:
+            # GDI の向きのまま: 始点 = GDI の始点。各区間の終点 = 次の区間の始点（最後は GDI の最後の点）
+            if not items:
+                continue
+            ends = [a for _, a in items[1:]] + [cur]
+            for (c, _a), e in zip(items, ends):
+                if c is None:
+                    if out and out[-1][0] == PRIM_LINE:
+                        out[-1][1].append(e)
+                    else:
+                        out.append((PRIM_LINE, [e]))
+                else:
+                    out.append((PRIM_QSPLINE, [c, e]))
+            res.append(Contour(items[0][1], out))
+            continue
         for c, a in reversed(items):
             if c is None:
                 if out and out[-1][0] == PRIM_LINE:
@@ -264,7 +287,8 @@ class GdiGlyphSource:
     分からないフォントは measure_shift() で、そのフォントの字形を持つ .ts1 から求める
     """
 
-    def __init__(self, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, italic=False):
+    def __init__(self, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, italic=False, flip=False):
+        self.flip = bool(flip)       # 輪郭の向きを逆にする（同じ書体の別形式のフォントから作るとき。convert を参照）
         self.font = GdiFont(face, weight, charset, italic)
         if not self.font.matched():
             got = self.font.face
@@ -281,7 +305,7 @@ class GdiGlyphSource:
         if code == 0:
             return Glyph(0, font_id, usage, [], self.ascent, self.descent)
         native, _gm = self.font.native(code)
-        g = Glyph(code, font_id, usage, convert(native, self.y_shift), self.ascent, self.descent)
+        g = Glyph(code, font_id, usage, convert(native, self.y_shift, self.flip), self.ascent, self.descent)
         g.header_raw = build_header(g, self.font.abc(code), self.font.blackbox(code))
         return g
 
@@ -356,6 +380,113 @@ def match_font(font, glyphs):
         if ok:
             return s_
     return None
+
+
+def _area(contours):
+    """輪郭の符号つき面積の合計（2 次曲線のふくらみも入れた正確な値。向きと大きさを比べるのに使う）"""
+    def cross(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+    tot = 0.0
+    for c in contours:
+        cur = c.start
+        for prim, pts in c.segs:
+            if prim == PRIM_QSPLINE:
+                ctl, e = pts
+                # 弦の分 + 弦と曲線の間（三角形 cur-ctl-e の 2/3）
+                tot += cross(cur, e) / 2 + ((ctl[0] - cur[0]) * (e[1] - cur[1]) - (ctl[1] - cur[1]) * (e[0] - cur[0])) / 3
+                cur = e
+            else:
+                for e in pts:
+                    tot += cross(cur, e) / 2
+                    cur = e
+        tot += cross(cur, c.start) / 2
+    return tot
+
+
+def _box(contours):
+    xs = [p[0] for c in _points(contours) for p in c]
+    ys = [p[1] for c in _points(contours) for p in c]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def sibling_match(font, glyphs, tol=3, area_tol=0.004):
+    """1 点残らずは一致しないフォントが、同じ書体の別の形式（OpenType 版と TrueType 版）かどうか。
+    全部の字で、字形の枠の差が tol（2048 単位）以内・面積の差が area_tol 以内なら
+    {"y_shift", "flip", "dev", "area_dev", "header_ok"} を返す（違えば None）。
+      flip = 輪郭の向きが .ts1 の字と逆（convert に渡す）。dev = 枠の差の最大。header_ok = 字幅（A・B・C）まで同じ字の数
+    実測（装飾サンプル 5 本・32 字。.ts1 は OpenType 版の輪郭、PC には TrueType 版）: 枠の差は最大 3、面積の差は最大 0.2%。
+    太さが 1 段違うと枠が 5 以上・面積が数 % 違うので、取り違えない"""
+    if not glyphs:
+        return None
+    try:
+        nats = [font.native(g.code)[0] for g in glyphs]
+    except KeyError:
+        return None
+    if not nats[0]:
+        return None
+    guess = _box(convert(nats[0], 0))[1] - _box(glyphs[0].contours)[1]
+    best = None
+    for s_ in (guess, guess - 1, guess + 1):
+        dev, adev, tot, ok, flips = 0, 0.0, 0, True, []
+        for g, nat in zip(glyphs, nats):
+            cv = convert(nat, s_)
+            if not cv:
+                ok = False
+                break
+            d = max(abs(a - b) for a, b in zip(_box(cv), _box(g.contours)))
+            a0, a1 = _area(g.contours), _area(cv)
+            if d > tol or not a0 or abs(abs(a1) - abs(a0)) > area_tol * abs(a0):
+                ok = False
+                break
+            dev = max(dev, d)
+            tot += sum(abs(a - b) for a, b in zip(_box(cv), _box(g.contours)))
+            adev = max(adev, abs(abs(a1) - abs(a0)) / abs(a0))
+            flips.append((a0 > 0) != (a1 > 0))
+        if ok and len(set(flips)) == 1 and (best is None or (dev, tot) < (best["dev"], best["_tot"])):
+            best = {"y_shift": s_, "flip": flips[0], "dev": dev, "area_dev": round(adev, 5), "_tot": tot}
+    if best is None:
+        return None
+    hdr = 0
+    for g in glyphs:
+        abc = font.abc(g.code)
+        hdr += bool(abc and g.header_raw and len(g.header_raw) >= 56 and struct.unpack_from("<iii", g.header_raw, 44) == tuple(abc))
+    best["header_ok"] = hdr
+    del best["_tot"]
+    return best
+
+
+def find_siblings(ts1, font_id=None, faces=None):
+    """1 点残らず一致するフォントが無いとき: 同じ書体の別形式のフォントを、入っている全フォントから探す。
+    → [{"face", "weight", "italic", "charset", "y_shift", "flip", "dev", "header_ok", "postscript", ...}, ...]（近い順）"""
+    glyphs = ref_glyphs(ts1, font_id)
+    if not glyphs or not available():
+        return []
+    styles = list_styles()
+    if faces is not None:
+        styles = [s_ for s_ in styles if s_[0] in faces]
+    hits, seen = [], set()
+    for face, weight, italic, cs in styles:
+        try:
+            with GdiFont(face, weight, cs, italic) as f:
+                if not f.matched():
+                    continue
+                m = sibling_match(f, glyphs)
+                if m is None:
+                    continue
+                nm = f.names()
+                fmt = f.outline_format()
+        except Exception:
+            continue
+        key = (face, nm.get("postscript"))
+        if key in seen:
+            continue
+        seen.add(key)
+        # .ts1 の字形の形式: 向きが逆なら PC のフォントと反対の形式（OpenType ↔ TrueType）
+        other = {"OpenType": "TrueType", "TrueType": "OpenType"}[fmt]
+        hits.append({"face": face, "weight": weight, "italic": italic, "charset": cs, **m, **nm,
+                     "format": fmt, "ts1_format": other if m["flip"] else fmt})
+    hits.sort(key=lambda h: (-h["header_ok"], h["dev"], h["area_dev"], h["face"]))
+    return hits
 
 
 def compare(ts1, face, y_shift, weight=0, charset=SHIFTJIS_CHARSET, font_id=None, italic=False):

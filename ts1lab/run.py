@@ -70,6 +70,14 @@ KNOWN_FONTS = {
     "1117": {"name": "ニューロダン B（番号 1117）", "hints": [["ニューロダン", "B"], ["NewRodin", "B"]]},
     "1123": {"name": "ニューロダン UB", "face": "FOT-ニューロダン Pro UB", "postscript": "NewRodinPro-UB", "weight": 900,
              "hints": [["ニューロダン", "UB"], ["NewRodin", "UB"]]},
+    # 以下は推定（2026-11-13）。.ts1 の字形が OpenType 版の輪郭（向き・点の打ち方）で、形は同じ書体の TrueType 版
+    # （FTT-ロダンNTLG UB / FTT-ロダンわんぱく UB）と 2048 分の 3 以内で重なる。番号の並びも合う
+    # （ニューロダンは L 1113・M 1115・DB?1117・B 1119・EB 1121・UB 1123 と 2 つおき。同じ並びなら
+    #   ロダンNTLG が 1443〜1453、すぐ次のロダンわんぱくが 1455〜1465 で、UB はどちらも最後）。VWS の表示名は未確認
+    "1453": {"name": "ロダンNTLG UB", "face": "FOT-ロダンNTLG Pro UB", "postscript": "RodinNTLGPro-UB", "weight": 900,
+             "hints": [["ロダンNTLG", "UB"], ["RodinNTLG", "UB"]]},
+    "1465": {"name": "ロダンわんぱく UB", "face": "FOT-ロダンわんぱく Pro UB", "postscript": "RodinWanpakuPro-UB", "weight": 900,
+             "hints": [["ロダンわんぱく", "UB"], ["RodinWanpaku", "UB"]]},
 }
 # VWS で開くと「不明な書体」と出た番号（この番号のフォントは VWS に無い）: 1114, 1116, 1118, 1120, 1122, 1124
 VWS_UNKNOWN_IDS = {1114, 1116, 1118, 1120, 1122, 1124}
@@ -194,6 +202,11 @@ def resolve_font(cfg, fid, ts1, force=False):
                     h = hits[0]
                     e.update({"face": h["face"], "weight": h["weight"], "italic": h["italic"], "charset": h["charset"],
                               "y_shift": h["y_shift"], "exact": True})
+                    try:
+                        with gdiglyph.GdiFont(h["face"], h["weight"], h["charset"], h["italic"]) as f_:
+                            e["format"] = f_.outline_format()
+                    except Exception:
+                        pass
                     if h.get("postscript"):
                         e["postscript"] = h["postscript"]
                     if "name" not in e or e.get("name_auto"):     # 名前が未登録なら書体名を名前にする（候補が絞られたら付け直す）
@@ -208,12 +221,21 @@ def resolve_font(cfg, fid, ts1, force=False):
                     else:
                         e.pop("same_shape", None)
                     e.pop("scan_sig", None)
+                    e.pop("sibling", None)
                 else:
                     if e.get("exact"):       # 前は入っていたフォントが無くなった
                         for k in ("y_shift", "italic", "charset"):
                             e.pop(k, None)
                     e["exact"] = False
                     e["scan_sig"] = sig
+                    _find_sibling(e, ts1, fid)
+            elif "sibling" not in e:
+                _find_sibling(e, ts1, fid)          # 前に探したときは、この探し方がまだ無かった
+            elif e.get("sibling") and (e["sibling"].get("others") or len(gdiglyph.ref_glyphs(ts1, fid)) > e["sibling"].get("chars", 0)):
+                # 候補が複数残っているか、前より字の多い .ts1 → 前の候補だけを確かめ直す（絞れる・縦位置が確かになる）
+                old = e["sibling"]
+                if not _find_sibling(e, ts1, fid, only=[old["face"]] + list(old.get("others", []))):
+                    e["sibling"] = old
     except Exception as ex:
         print(f"  ※ Windows のフォントとの照合はできませんでした（{ex}）")
     if not e:
@@ -223,6 +245,34 @@ def resolve_font(cfg, fid, ts1, force=False):
         tbl[key] = e
         save_table(cfg, tbl)
     return e
+
+
+def _find_sibling(e, ts1, fid, only=None):
+    """1 点残らず一致するフォントが PC に無いとき: 同じ書体の別形式（OpenType 版 ↔ TrueType 版）を探して e["sibling"] に入れる。
+    見つからなければ e["sibling"] = None（探した印）。候補が複数あるとき（この文言の字では区別できない）は others に残し、
+    別の文言の .ts1 を読むたびに絞る"""
+    import fontfind
+    import gdiglyph
+    hits = gdiglyph.find_siblings(ts1, fid, faces=only)
+    if not hits:
+        if only is None:
+            e["sibling"] = None
+        return False
+    hints = e.get("hints", [])
+
+    def rank(h):
+        named = any(fontfind.hint_match(n, hh) for hh in hints for n in (h["face"], h.get("postscript") or "") if n)
+        return (0 if named else 1, -h["header_ok"], h["dev"])
+    hits.sort(key=rank)
+    h = hits[0]
+    sib = {k: h[k] for k in ("face", "weight", "italic", "charset", "y_shift", "flip", "dev", "format", "ts1_format")}
+    sib["postscript"] = h.get("postscript")
+    sib["chars"] = len(gdiglyph.ref_glyphs(ts1, fid))
+    others = [x["face"] for x in hits[1:] if x["face"] != h["face"]]
+    if others:
+        sib["others"] = others
+    e["sibling"] = sib
+    return True
 
 
 def font_status(e):
@@ -239,7 +289,13 @@ def font_status(e):
         if e.get("same_shape"):
             return name, (f"候補が {len(e['same_shape']) + 1} つ:「{e.get('face')}」「{'」「'.join(e['same_shape'])}」。"
                           "この文言の字ではどれも 1 点残らず同じ形で、区別できません（別の文言の .ts1 を読むと絞られます）")
-        return name, f"確定: Windows の「{e.get('face')}」の字形と 1 点残らず一致"
+        return name, f"確定: Windows の「{e.get('face')}」の字形と 1 点残らず一致" + (f"（{e['format']} 版）" if e.get("format") else "")
+    if e.get("sibling"):
+        sb = e["sibling"]
+        more = f"（ほかの候補:「{'」「'.join(sb['others'])}」。この文言の字では区別できません）" if sb.get("others") else ""
+        return name, (f"ほぼ確定: .ts1 の字形は {sb.get('ts1_format', '別の形式')} 版の作り。"
+                      f"この PC にあるのは同じ書体の {sb.get('format', '別の形式')} 版「{sb['face']}」です{more}。"
+                      f"輪郭の点の打ち方は違いますが、形の差は 2048 分の {sb['dev']} 以内。新しい字はここから作ります")
     if e.get("in_file"):
         return name, "名前は .ts1 の中に書かれています。この PC には入っていません"
     if e.get("score"):
@@ -296,6 +352,8 @@ def _baseline_fit(e):
     f = _fit_of(e)
     if f is None and e and e.get("y_shift") is not None:
         f = {"oy": -(float(e["y_shift"]) + 0.26)}
+    if f is None and e and e.get("sibling"):
+        f = {"oy": -(float(e["sibling"]["y_shift"]) + 0.26)}
     if f is None and e and (e.get("substitute") or {}).get("oy") is not None:
         f = {"oy": float(e["substitute"]["oy"])}
     return f
@@ -313,6 +371,9 @@ def substitute_font(cfg, fid, e, ts1=None):
     （見た目の正確さは PSD の画像レイヤが受け持つ。編集用テキストの組みと位置を近づけるためのもの）"""
     if not e or e.get("exact"):
         return None
+    if e.get("sibling") and e["sibling"].get("postscript"):      # 同じ書体の別形式が PC にある → それを使う
+        sb = e["sibling"]
+        return {"face": sb["face"], "postscript": sb["postscript"], "oy": -(float(sb["y_shift"]) + 0.26)}
     try:
         import gdiglyph
         if not gdiglyph.available():
@@ -367,6 +428,15 @@ def glyph_source(cfg, fid, e, ts1=None, quiet=False):
                 if not quiet:
                     print(f"  字形の作り方: Windows の「{e['face']}」から VWS と同じ方法で作成")
                 return src
+            sb = e.get("sibling")
+            if sb and not e.get("exact"):
+                src = gdiglyph.GdiGlyphSource(sb["face"], int(sb["y_shift"]), int(sb.get("weight", 0)),
+                                              int(sb.get("charset", gdiglyph.SHIFTJIS_CHARSET)), bool(sb.get("italic")),
+                                              flip=bool(sb.get("flip")))
+                if not quiet:
+                    print(f"  字形の作り方: Windows の「{sb['face']}」（同じ書体の別形式）から作成。"
+                          f"元からある字とは点の打ち方が違いますが、形の差は 2048 分の {sb['dev']} 以内です")
+                return src
     except Exception as ex:
         if not quiet:
             print(f"  ※ Windows からの字形作成は使えませんでした（{ex}）")
@@ -403,6 +473,17 @@ def identify(cfg, path):
         if e and e.get("exact"):
             mark = "☆ 候補" if e.get("same_shape") else "★"
             print(f"  {mark} VWS フォント番号 {fid} = 「{e.get('name')}」（PostScript 名: {e.get('postscript')}、太さ {e.get('weight')}）")
+            continue
+        if e and e.get("sibling"):
+            sb = e["sibling"]
+            print(f"  ☆ VWS フォント番号 {fid} ≒ 「{e.get('name')}」。.ts1 の字形は {sb.get('ts1_format')} 版の作りで、"
+                  f"この PC にあるのは同じ書体の {sb.get('format')} 版「{sb['face']}」（PostScript 名: {sb.get('postscript')}）です。"
+                  f"形の差は 2048 分の {sb['dev']} 以内")
+            if e.get("face") and e["face"] != sb["face"]:
+                print(f"     VWS の PC にあるのは「{e['face']}」と思われます（推定）。これをこの PC に入れると 1 点残らず一致するはずです")
+            if sb.get("others"):
+                print(f"     ほかの候補:「{'」「'.join(sb['others'])}」（この文言の字では区別できません。別の文言の .ts1 を読むと絞られます）")
+            print("     新しい字はこのフォントから作ります（元からある字は .ts1 の中の字形をそのまま使います）")
             continue
         if e and e.get("in_file"):
             print(f"  ★ VWS フォント番号 {fid} = 「{e.get('name')}」（.ts1 の中のフォント表より。PostScript 名: {e.get('postscript')}）")
