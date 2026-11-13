@@ -499,7 +499,7 @@ class TS1:
         out = []
         roles = {0: ("face", "文字面"), 9: ("edge", "縁"), 1: ("shadow", "影"),
                  0x800: ("glow", "光彩（外へぼかす）"), 0x801: ("face", "文字面（内側に帯。面取り?）"),
-                 3: ("other", "種別 3（右下への立体?）"), 4: ("other", "種別 4（右下への立体?）"), 0x10: ("other", "種別 16（影?）")}
+                 3: ("other", "立体（右下へ伸びる）"), 4: ("other", "四角い縁"), 0x10: ("other", "影（右下へずらしてぼかす）")}
         e = 20 if p[3] else 4
         for k in range(n):
             if k:
@@ -515,6 +515,7 @@ class TS1:
                 "gradient": decode_gradient(raw, order) if t == "CGRD" else None,
                 "opacity256": u16(p, e + 32),                    # 256 = 100%
                 "width_px": i32(p, e + 34),                      # 符号つき（光彩は負）
+                "width2_px": i32(p, e + 38),                     # 太さ 2（立体・影で太さと違う値になる）
                 "flags": u32(p, e + 8),
                 "index": k,
                 "kind": kind,
@@ -909,6 +910,29 @@ class TS1:
                     break
                 out[d["color_resource"]] = encode_color(want, order)
                 break
+        return out
+
+    def element_views(self):
+        """層の中の文字の要素（CSML / CSSL）ごとに、その要素だけを持つ TS1 を返す（図形などの要素は除く）。
+        リソース（字形・色）は共通。描画で 2 つめ以降の文字を描くのに使う"""
+        b = self.data
+        s = self.off["SLYR"]
+        name, p = read_str(b, s + 8)
+        p += 2                                   # u16
+        eset = p
+        out = []
+        for tag, o, size in self.elements:
+            if tag not in ("CSML", "CSSL"):
+                continue
+            if o == self.off["CSML"]:
+                out.append(self)
+                continue
+            slyr_body = b[s + 8:eset] + b[eset:eset + 8] + struct.pack("<H", 1) + b[o:o + size]
+            slyr = b"SLYR" + struct.pack("<I", 8 + len(slyr_body)) + slyr_body
+            swrk_body = b[0x18:s] + slyr
+            swrk = b"SWRK" + struct.pack("<I", 8 + len(swrk_body)) + swrk_body
+            tsrc_body = b[8:0x10] + swrk
+            out.append(TS1(b"TSRC" + struct.pack("<I", 8 + len(tsrc_body)) + tsrc_body))
         return out
 
     def is_plain(self):

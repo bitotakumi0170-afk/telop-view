@@ -18,8 +18,22 @@ CANVAS = (1920, 1080)
 # ----------------------------------------------------------------------------
 # TS1 → 画像 / PSD（ピクセルレイヤ）
 # ----------------------------------------------------------------------------
+def _decorated(ts1):
+    """文字面 + 縁 1 本（+ 影）より複雑な装飾か（そのときは vwslayers で層を重ねて描く）"""
+    try:
+        return not ts1.is_plain()
+    except Exception:
+        return False
+
+
 def ts1_to_png(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     """キャンバス全体（1920×1080）の透過 PNG"""
+    if _decorated(ts1) and edge is None:
+        from PIL import Image
+        import vwslayers
+        out, _ = vwslayers.render_layers(ts1, CANVAS, color_order)
+        Image.fromarray(out, "RGBA").save(out_path)
+        return out_path
     # VWS と同じ手順（8 倍の整数格子・GDI の塗り・上下 2 ライン・ずらし重ねの縁・整数の色計算）で描く
     import vwsrender
     vwsrender.render_image(ts1, edge=edge, canvas=CANVAS, color_order=color_order).save(out_path)
@@ -102,11 +116,41 @@ def ts1_to_psd(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
     import vwsrender
     face, edge_img, (l, t) = vwsrender.render_layers(ts1, edge=edge, canvas=CANVAS, color_order=color_order)
     psd = PSDImage.new("RGBA", CANVAS, color=(0, 0, 0, 0))
+    if _decorated(ts1) and edge is None:
+        _add_decoration_layers(psd, ts1, color_order)
+        _add_texture_group(psd, ts1)
+        psd.save(out_path)
+        return out_path
     e = psd.create_pixel_layer(edge_img, name="edge", top=t, left=l)
     f = psd.create_pixel_layer(face, name="face", top=t, left=l)
     g = psd.create_group([e, f], name="TS1")
     # 日本語名は Unicode レイヤ名ブロックに入る（setter 経由）
     e.name, f.name, g.name = "縁", "文字", f"TS1: {ts1.text}"[:120]
+    _add_texture_group(psd, ts1)
+    psd.save(out_path)
+    return out_path
+
+
+def _add_decoration_layers(psd, ts1, color_order=COLOR_ORDER):
+    """装飾の層を 1 枚ずつピクセルレイヤにする（下の層から積む）。グループ名に文言"""
+    from PIL import Image
+    import vwslayers
+    _, layers = vwslayers.render_layers(ts1, CANVAS, color_order)
+    made = []
+    for name, L in reversed(layers):
+        im = Image.fromarray(L, "RGBA")
+        bb = im.getbbox()
+        if not bb:
+            continue
+        ly = psd.create_pixel_layer(im.crop(bb), name="layer", top=bb[1], left=bb[0])
+        ly.name = f"装飾 {name}"
+        made.append(ly)
+    if made:
+        g = psd.create_group(made, name="TS1")
+        g.name = f"TS1: {ts1.text}"[:120]
+
+
+def _add_texture_group(psd, ts1):
     tex = texture_images(ts1)
     if tex:
         layers = []
@@ -118,8 +162,6 @@ def ts1_to_psd(ts1: TS1, out_path, color_order=COLOR_ORDER, edge=None):
         tg = psd.create_group(layers, name="textures")
         tg.name = TEXTURE_GROUP
         tg.visible = False
-    psd.save(out_path)
-    return out_path
 
 
 # ----------------------------------------------------------------------------
