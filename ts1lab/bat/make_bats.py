@@ -12,6 +12,7 @@ BATS = {
     "2_TS1をPhotoshop用に変換.bat": ("to-ps", ".ts1 をこの bat にドラッグ＆ドロップしてください"),
     "3_PSDをTS1に変換.bat": ("to-ts1", "Photoshop で保存した .psd をこの bat にドラッグ＆ドロップしてください"),
     "4_TS1の文字を打ち替える.bat": ("text", ".ts1 をこの bat にドラッグ＆ドロップしてください（新しい文言を聞かれます）"),
+    "5_ストックからまとめて打ち替える.bat": ("batch", "ストックの .ts1 を入れたフォルダ（一覧を作ります）か、書き込んだ 打ち替え一覧.csv をこの bat にドラッグ＆ドロップしてください"),
     "フォントを特定する.bat": ("identify", ".ts1 をこの bat にドラッグ＆ドロップしてください（PC のフォントと字形を照合します）"),
     "中身を見る.bat": ("info", ".ts1 をこの bat にドラッグ＆ドロップしてください"),
     "VWS確認用の一式を作る.bat": ("vws-make", ".ts1 をこの bat にドラッグ＆ドロップしてください（条件を 1 つずつ変えた確認用 .ts1 を作ります）"),
@@ -33,7 +34,7 @@ def main():
             if cmd.startswith("vws-"):
                 line = f'{VWSTEST} {cmd[4:]} "%~1"'
             else:
-                line = f'{RUN} {cmd} "%~1"' if cmd == "text" else f"{RUN} {cmd} %*"
+                line = f'{RUN} {cmd} "%~1"' if cmd in ("text", "batch") else f"{RUN} {cmd} %*"
             lines += [f'if "%~1"=="" (echo {hint} & pause & exit /b 1)', line]
         lines += ["echo.", "pause"]
         with open(os.path.join(out, name), "w", encoding="utf-8", newline="\r\n") as f:

@@ -9,6 +9,8 @@
                                         （to-ps / text / info でも自動で特定する。これは結果を詳しく見たいとき・候補を出したいとき用）
   python run.py font-name 番号 名前    → フォント番号に名前を手で登録（PC に無いフォントを VWS の画面で確かめたとき）
   python run.py text   素材.ts1 [新しい文言] → 書式はそのまま文言だけ打ち替え（素材_打ち替え.ts1 / _確認.png）。文言を省くと入力を求める
+  python run.py batch ストックのフォルダ → そのフォルダの .ts1 の一覧（打ち替え一覧.csv）を作る。Excel で「新しい文言」を書き込む
+  python run.py batch 打ち替え一覧.csv → 一覧どおりにまとめて打ち替え（打ち替え結果_日時 のフォルダに .ts1 と確認 PNG、結果.csv）
   python run.py texture 素材.ts1      → 文字面に貼る模様の画像を取り出す（素材_模様<番号>_面<k>.png。値はそのまま 0〜255 の濃淡）
   python run.py texture-in 素材.ts1 画像.png [番号] [面]
                                       → 模様を画像で差し替える（素材_模様差し替え.ts1）。番号・面は texture の出力名のもの（省くと最初の模様の面 0）
@@ -554,48 +556,220 @@ def to_ts1(cfg, path):
     print(f"  → {os.path.basename(base)}_VWS用.ts1 / {os.path.basename(base)}_確認.png")
 
 
-def retype(cfg, path, text=None):
-    """.ts1 の書式（位置・色・縁・サイズ・フォント番号）のまま文言だけ打ち替える。
-    元の .ts1 にある文字は VWS の字形をそのまま使い、無い文字だけ PC のフォントから作る"""
-    from ts1core import build_text
-    from psdbridge import ts1_to_png
-    with open(path, "rb") as f:
-        t = TS1(f.read())
-    print(f"  今の文言: {t.text}")
-    if text is None:
-        text = input("  新しい文言（改行は \\n と入力）: ").strip()
-    text = text.replace("\\n", "\n")
-    if not text:
-        print("  文言が空なので中止しました")
-        return
+def retype_bytes(cfg, t, text, quiet=False):
+    """打ち替えの本体（ファイルは書かない）→ (新しい .ts1 のバイト列, 注意の一覧)。
+    書式（位置・色・縁・サイズ・フォント番号・装飾）はそのまま。元の .ts1 にある文字は VWS の字形をそのまま使い、
+    無い文字だけ PC のフォントから作る。続けられない問題は RuntimeError"""
+    from ts1core import build_text, u32
+    say = (lambda *a: None) if quiet else print
+    notes = []
+    text = text.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        raise RuntimeError("文言が空です")
     if t.kind == "CSSL" and "\n" in text:
-        raise RuntimeError("この .ts1 は枠なしの 1 行ものです。改行は入れられません（この型が 2 行を持てるか確かめられていないため）")
+        raise RuntimeError("この型は枠なしの 1 行ものです。改行は入れられません（この型が 2 行を持てるか確かめられていないため）")
     e = font_for_id(cfg, t.font_id, t)
     font = None
     have = {g.code for g in t.glyphs}
     need = sorted({c for c in text if c != "\n" and ord(c) not in have})
     if e:
         name_, how_ = font_status(e)
-        print(f"  フォント: {name_}（VWS 番号 {t.font_id}。{how_}）")
-        font = glyph_source(cfg, t.font_id, e, t)
+        say(f"  フォント: {name_}（VWS 番号 {t.font_id}。{how_}）")
+        font = glyph_source(cfg, t.font_id, e, t, quiet=quiet)
     if font is not None:
         if need:
-            print(f"  元の .ts1 に無い {len(need)} 文字はフォントから作ります: {''.join(need)}")
+            say(f"  元の .ts1 に無い {len(need)} 文字はフォントから作ります: {''.join(need)}")
+            notes.append(f"フォントから作った字: {''.join(need)}")
     elif need:
         raise RuntimeError(f"元の .ts1 に無い文字があり、フォント番号 {t.font_id} のフォントがこの PC に入っていません: {''.join(need)}"
                            "（そのフォントを PC に入れるか、元の .ts1 にある字だけで組んでください）")
-    chars, glyphs = build_text(t, text, font=font, spacing=[0.0] * (len(text) + 1), prefer_template=True)
+    # 普通の型は字間 0 で組み直す。装飾つきの型は、字間も「何文字目か」で元の値を引き継ぐ（二色の数字の −30・−68 など）
+    spacing = [0.0] * (len(text) + 1) if t.is_plain() else None
+    chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True)
     out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
+    t2 = TS1(out)
+    width = max(len(line) for line in text.split("\n")) * t2.char_size[0]
+    if t2.kind == "CSML" and width > t2.box[0]:      # 1 行もの（CSSL）は枠が無い（行の幅が文言に合わせて変わる）
+        notes.append(f"文字の幅 {width:g}px が枠の幅 {t2.box[0]:g}px を超えています（VWS で左右がはみ出すかもしれません）")
+    # 装飾つきの型の注意
+    if not t.is_plain():
+        per = t.decorations_per_char()
+        sig = [tuple((d["kind"], d["color_resource"]) for d in ds) for ds in per]
+        visible = [k for k, ch in enumerate(t.chars) if ch.code]
+        switch = [k for k in visible[1:] if sig[k] != sig[k - 1]]
+        mags = t.magnifications()
+        mag_switch = [k for k in visible[1:] if mags[k] != mags[k - 1]]
+        n_old, n_new = len(visible), len([c for c in text if c != "\n"])
+        if (switch or mag_switch) and n_old != n_new:
+            at = sorted(set(switch + mag_switch))
+            notes.append(f"字ごとに色や大きさが変わる型です（元: {'・'.join(str(k + 1) for k in at)} 文字目から）。"
+                         f"変わり目は何文字目かで決まるので、文字数が違う文言（{n_old} → {n_new} 文字）では狙いとずれます")
+        afin = t.base_attr("AFIN")
+        if afin is not None and u32(afin, 2) and n_old != n_new:
+            notes.append("字の並び方が未解明の型です（金・縞と同じ設定）。打ち替えたあと VWS で字の位置を確かめてください")
+        notes.append("装飾つきの型です。確認画像の装飾は近似なので、最初の 1 回は VWS で見てください")
+    return out, notes
+
+
+def retype(cfg, path, text=None):
+    """.ts1 の書式（位置・色・縁・サイズ・フォント番号）のまま文言だけ打ち替える。
+    元の .ts1 にある文字は VWS の字形をそのまま使い、無い文字だけ PC のフォントから作る"""
+    from psdbridge import ts1_to_png
+    with open(path, "rb") as f:
+        t = TS1(f.read())
+    print(f"  今の文言: {t.text}")
+    if text is None:
+        text = input("  新しい文言（改行は \\n と入力）: ").strip()
+    if not text:
+        print("  文言が空なので中止しました")
+        return
+    out, notes = retype_bytes(cfg, t, text)
     base = os.path.splitext(path)[0] + "_打ち替え"
     with open(base + ".ts1", "wb") as f:
         f.write(out)
     t2 = TS1(out)
     ts1_to_png(t2, base + "_確認.png")
-    width = max(len(line) for line in text.split("\n")) * t2.char_size[0]
-    if t2.kind == "CSML" and width > t2.box[0]:      # 1 行もの（CSSL）は枠が無い（行の幅が文言に合わせて変わる）
-        print(f"  ※ 文字の幅 {width:g}px が枠の幅 {t2.box[0]:g}px を超えています（VWS で左右がはみ出す可能性があります）")
+    for n in notes:
+        if not n.startswith("フォントから作った字"):
+            print(f"  ※ {n}")
     print(f"  新しい文言: {t2.text}")
     print(f"  → {os.path.basename(base)}.ts1 / {os.path.basename(base)}_確認.png")
+
+
+# ---------------------------------------------------------------------------
+# ストックから一覧どおりにまとめて打ち替える
+# ---------------------------------------------------------------------------
+LIST_NAME = "打ち替え一覧.csv"
+LIST_COLS = ["型", "新しい文言", "出力名", "今の文言（参考）", "型のメモ（参考）"]
+
+
+def _read_list(path):
+    import csv
+    raw = open(path, "rb").read()
+    for enc in ("utf-8-sig", "cp932"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    rows = list(csv.reader(io_StringIO(text)))
+    return rows
+
+
+def io_StringIO(text):
+    import io as _io
+    return _io.StringIO(text, newline="")
+
+
+def _stock_files(folder):
+    out = []
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if not d.startswith("打ち替え結果_")]
+        for fn in sorted(files):
+            if fn.lower().endswith(".ts1") and "_打ち替え" not in fn and not fn.endswith("_VWS用.ts1"):
+                out.append(os.path.join(root, fn))
+    return out
+
+
+def _type_memo(t):
+    memo = []
+    memo.append("1 行もの（枠なし）" if t.kind == "CSSL" else "枠つき（改行できる）")
+    if not t.is_plain():
+        kinds = sorted({d["role_ja"].split("（")[0] for ds in t.decorations_per_char() for d in ds})
+        memo.append("装飾つき: " + "・".join(kinds))
+        per = t.decorations_per_char()
+        sig = [tuple((d["kind"], d["color_resource"]) for d in ds) for ds in per]
+        mags = t.magnifications()
+        at = [k + 1 for k in range(1, len(t.chars)) if t.chars[k].code and (sig[k] != sig[k - 1] or mags[k] != mags[k - 1])]
+        if at:
+            memo.append(f"{'・'.join(map(str, at))} 文字目から色か大きさが変わる")
+    return " / ".join(memo)
+
+
+def stock_list(cfg, folder):
+    """ストックのフォルダの .ts1 を一覧にして 打ち替え一覧.csv を作る（Excel で開ける UTF-8 BOM 付き）"""
+    import csv
+    files = _stock_files(folder)
+    if not files:
+        raise RuntimeError(f"このフォルダに .ts1 がありません: {folder}")
+    dst = os.path.join(folder, LIST_NAME)
+    if os.path.exists(dst):
+        dst = os.path.join(folder, "打ち替え一覧_ひな形.csv")
+    rows = [LIST_COLS]
+    for p in files:
+        try:
+            t = TS1(open(p, "rb").read())
+            rows.append([os.path.relpath(p, folder), "", "", t.text.replace("\n", "\\n").replace("\r", "\\n"), _type_memo(t)])
+        except Exception as ex:
+            rows.append([os.path.relpath(p, folder), "", "", "", f"読めません: {ex}"])
+    with open(dst, "w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f).writerows(rows)
+    print(f"  型 {len(files)} 本の一覧を作りました → {dst}")
+    print("  Excel で開いて「新しい文言」の列に書き込み、保存してから、この一覧を同じ bat に入れてください")
+    print("  （1 つの型を何回使ってもかまいません。行をコピーして文言だけ変えてください。改行は \\n か、セルの中の改行で）")
+
+
+def batch(cfg, path):
+    """一覧どおりにまとめて打ち替える。フォルダを渡されたら一覧を作る"""
+    import csv
+    import datetime
+    import re
+    from psdbridge import ts1_to_png
+    if os.path.isdir(path):
+        stock_list(cfg, path)
+        return
+    folder = os.path.dirname(os.path.abspath(path))
+    rows = _read_list(path)
+    if not rows:
+        raise RuntimeError("一覧が空です")
+    head = [c.strip() for c in rows[0]]
+    col = {name: (head.index(name) if name in head else None) for name in LIST_COLS}
+    if col["型"] is None or col["新しい文言"] is None:
+        raise RuntimeError(f"一覧の 1 行目に「型」と「新しい文言」の列が必要です（今: {head}）")
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    out_dir = os.path.join(folder, f"打ち替え結果_{stamp}")
+    os.makedirs(out_dir, exist_ok=True)
+    cache, used, result = {}, set(), [["行", "型", "新しい文言", "結果", "出力", "注意"]]
+    ok = ng = 0
+    for i, r in enumerate(rows[1:], start=2):
+        get = lambda name: (r[col[name]].strip() if col[name] is not None and col[name] < len(r) else "")
+        typ, text, name = get("型"), get("新しい文言"), get("出力名")
+        if not typ and not text:
+            continue
+        if not text:
+            continue                              # 文言が無い行は飛ばす（一覧のひな形のまま）
+        src = typ if os.path.isabs(typ) else os.path.join(folder, typ)
+        if not os.path.exists(src) and not src.lower().endswith(".ts1"):
+            src += ".ts1"
+        label = f"{i} 行目（{os.path.basename(typ)} → {text.replace(chr(10), ' ')}）"
+        try:
+            if not os.path.exists(src):
+                raise RuntimeError(f"型の .ts1 が見つかりません: {typ}")
+            if src not in cache:
+                cache[src] = open(src, "rb").read()
+            t = TS1(cache[src])
+            out, notes = retype_bytes(cfg, t, text, quiet=True)
+            stem = name or f"{os.path.splitext(os.path.basename(src))[0]}_{text.replace(chr(10), ' ')[:16]}"
+            stem = re.sub(r'[\\/:*?"<>|\n\r\t]', "_", stem).strip() or "テロップ"
+            base, k = stem, 2
+            while base in used:
+                base, k = f"{stem}_{k}", k + 1
+            used.add(base)
+            with open(os.path.join(out_dir, base + ".ts1"), "wb") as f:
+                f.write(out)
+            ts1_to_png(TS1(out), os.path.join(out_dir, base + "_確認.png"))
+            ok += 1
+            warn = [n for n in notes if not n.startswith("フォントから作った字")]
+            print(f"  OK  {label} → {base}.ts1" + (f"\n      ※ " + "\n      ※ ".join(warn) if warn else ""))
+            result.append([i, typ, text, "OK", base + ".ts1", " / ".join(notes)])
+        except Exception as ex:
+            ng += 1
+            print(f"  NG  {label}: {ex}")
+            result.append([i, typ, text, "NG", "", str(ex)])
+    with open(os.path.join(out_dir, "結果.csv"), "w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f).writerows(result)
+    print(f"\n  できた {ok} 本 / できなかった {ng} 本 → {out_dir}")
+    print("  確認 PNG で文言と見た目を見てから納品してください（装飾つきの型は、最初の 1 回は VWS でも確かめてください）")
 
 
 def _color_text(d):
@@ -763,6 +937,14 @@ def main():
             print("使い方: python run.py gradient 素材.ts1 番号 色1,色2,... [位置1,位置2,...]")
             return 1
         gradient_set(cfg, files[0], files[1], files[2], files[3] if len(files) > 3 else None)
+        return 0
+    if cmd == "batch":
+        try:
+            batch(cfg, files[0])
+        except Exception as e:
+            print("  エラー:", e)
+            traceback.print_exc()
+            return 1
         return 0
     if cmd == "text":
         try:
