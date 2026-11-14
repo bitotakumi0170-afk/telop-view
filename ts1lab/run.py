@@ -640,6 +640,11 @@ def to_ts1(cfg, path):
                            font_id=font_id, clear_history=cfg.get("clear_history", False),
                            prefer_template=bool(hit), glyph_font=gsrc)
     # 「○○.ts1」にすると to-ps の元にした .ts1 を上書きしてしまうので、必ず別名にする
+    # こちらの作業の記録（日時・ユーザー名・端末名）を足していないこと。雛形の編集履歴・保存時刻のまま
+    import ts1check
+    bad = [m for lv, m in ts1check.local_trace(tmpl.data, out, cfg.get("clear_history", False)) if lv == ts1check.NG]
+    if bad:
+        raise RuntimeError("納品前の検査で止めました（この .ts1 は出していません）: " + " / ".join(bad))
     with open(base + "_VWS用.ts1", "wb") as f:
         f.write(out)
     t = TS1(out)

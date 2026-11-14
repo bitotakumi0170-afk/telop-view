@@ -179,6 +179,53 @@ def _explicit_style(t, ch):
     return tuple(sig), ch.pre_raw[18:22]
 
 
+def local_trace(template, out, clear_history=False):
+    """この PC で作業した記録が .ts1 に入っていないか → [(重さ, 説明)]。
+    ユーザーの決まり（2026-11-14）: 型の編集履歴は残す。こちらの作業の記録（日時・ユーザー名・端末名）は足さない。
+      ・編集履歴（OMR0）が型と 1 バイトも違わない（clear_history のときは 0 件になっている）
+      ・保存時刻（SWRK の saved）が型のまま
+      ・この PC のユーザー名・コンピュータ名が、型より多く出てこない"""
+    import getpass
+    import os
+    import socket
+    from structure import dump
+    msgs = []
+    f0, f1 = dump(template), dump(out)
+    h0 = [f.raw for f in f0 if "OMR0" in f.path]
+    h1 = [f.raw for f in f1 if "OMR0" in f.path]
+    if clear_history:
+        if len(h1) > 2:
+            msgs.append((NG, "編集履歴を消す設定なのに、履歴が残っています"))
+    elif h0 != h1:
+        msgs.append((NG, f"編集履歴が型と違います（型 {len(h0) - 2} 件 → {len(h1) - 2} 件、または中身が違う）。こちらの作業の記録は足さない決まりです"))
+    s0 = next((f.raw for f in f0 if f.path == "SWRK" and f.name == "saved"), None)
+    s1 = next((f.raw for f in f1 if f.path == "SWRK" and f.name == "saved"), None)
+    if s0 != s1:
+        msgs.append((NG, "保存時刻が型と違います（こちらの作業の日時は書かない決まりです）"))
+    names = set()
+    for get in (getpass.getuser, socket.gethostname, lambda: os.environ.get("COMPUTERNAME", ""), lambda: os.environ.get("USERNAME", "")):
+        try:
+            n = get()
+        except Exception:
+            n = ""
+        if n and len(n) >= 3:
+            names.add(n.lower())
+
+    def count(b):
+        low = b.lower()
+        tot = 0
+        for n in names:
+            for enc in ("ascii", "utf-16-le", "cp932"):
+                try:
+                    tot += low.count(n.encode(enc))
+                except UnicodeEncodeError:
+                    pass
+        return tot
+    if count(out) > count(template):
+        msgs.append((NG, "この PC のユーザー名かコンピュータ名が .ts1 に入っています"))
+    return msgs
+
+
 def check_figure_resize(before, after, index):
     """図形（座布団）の幅を変える前後を突き合わせる → [(重さ, 説明)]。
     変わってよいのは、その図形の左位置（とトランジションの x）・幅だけ"""
@@ -196,6 +243,7 @@ def check_figure_resize(before, after, index):
         b = f1.get(key)
         if b is None or f0[key].raw != b.raw:
             msgs.append((NG, f"図形の幅のほかの所が変わっています: {key}"))
+    msgs += local_trace(before, after)
     fa = next((f for f in TS1(after).figures() if f["index"] == index), None)
     if not fa or not fa["simple"] or fa["w"] <= 0:
         msgs.append((NG, "幅を変えたあとの図形を読めません"))
@@ -218,6 +266,7 @@ def check_retype(template, out, text=None, clear_history=False, plain_spacing=No
             msgs.append((NG, f"入っている文言が「{got}」です（入れたはずの文言は「{want}」）"))
     if not t1.chars or t1.chars[-1].code != 0:
         msgs.append((NG, "字の並びの最後に終端がありません"))
+    msgs += local_trace(template, out, clear_history)
     # ---- 項目ごとの突き合わせ（ORMP の中身と、主の文字要素の字の並びは別に見る）
     f0 = {f"{f.path}.{f.name}": f for f in dump(template)}
     f1 = {f"{f.path}.{f.name}": f for f in dump(out)}
