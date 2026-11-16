@@ -350,6 +350,16 @@ def encode_color(rgba, order=COLOR_ORDER):
     return bytes([r, g, b, a]) if order == "RGBA" else bytes([b, g, r, a])
 
 
+def glyph_abc(g):
+    """字形の (左の余白 A, 字の幅 B, 右の余白 C)（2048 単位）"""
+    h = g.header_raw
+    if h and len(h) >= 56:
+        a_, b_, c_ = struct.unpack_from("<iii", h, 44)
+        if a_ + b_ + c_ > 0:
+            return a_, b_, c_
+    return 0, CELL, 0
+
+
 PARTICLES = frozenset(ord(c) for c in "のをでがはにとへもや")      # 助詞として小さくされることのあるひらがな
 
 
@@ -853,39 +863,45 @@ class TS1:
         return self._mag_plan
 
     def spacing_plan(self):
-        """型の字間の付け方を読み取る → 関数 f(前の字のコード, この字のコード) → 字間 px。
-        同じ字の組が型にあればその値（いくつもあれば一番多い値）。無ければ 同じ種類の字の組 → この字と同じ種類 → 全体、の順に
-        型のまん中の値（小さいほうの中央値）。手で詰めた型の雰囲気を、別の文言にも残すため"""
+        """型の字間の付け方を読み取る → 関数 f(前の字のコード, この字のコード, 余白) → 字間 px。
+        同じ字の組が型にあればその値（いくつもあれば一番多い値）。
+        無ければ、**字と字のすき間（見た目のあき）**を型のまん中の値にそろえる: すき間 = 字間 + 前の字の右の余白 + この字の左の余白
+        （余白は字形ヘッダの C と A × 文字サイズ × 倍率）。型のすき間は 同じ種類の字の組 → 全体 の順にまん中の値（小さいほうの中央値）を取り、
+        字間 = そのすき間 − 余白（引数。新しい 2 字の 右の余白 + 左の余白）を四捨五入。
+        字間の値そのものを写すと、余白の広い字（全角の英数・かっこ）向けの強い詰めが漢字に当たって字が重なる"""
         if hasattr(self, "_sp_plan"):
             return self._sp_plan
-        sp = self.spacings()
-        pair, cls_pair, cls_cur, every = {}, {}, {}, []
+        sp, mg = self.spacings(), self.magnifications()
+        size = self.char_size[0]
+        pair, cls_gap, every, vals = {}, {}, [], []
         prev = None
         for i, ch in enumerate(self.chars):
             if not ch.code or ch.code in (0x0A, 0x0D):
                 prev = None
                 continue
             if prev is not None:
-                a, b = self.chars[prev].code, ch.code
-                pair.setdefault((a, b), []).append(sp[i])
-                cls_pair.setdefault((char_class(a), char_class(b)), []).append(sp[i])
-                cls_cur.setdefault(char_class(b), []).append(sp[i])
-                every.append(sp[i])
+                a_, b_ = self.chars[prev].code, ch.code
+                bear = (glyph_abc(self.glyph_at(self.chars[prev].glyph_index))[2] * mg[prev][0]
+                        + glyph_abc(self.glyph_at(ch.glyph_index))[0] * mg[i][0]) * size / 100 / CELL
+                pair.setdefault((a_, b_), []).append(sp[i])
+                cls_gap.setdefault((char_class(a_), char_class(b_)), []).append(sp[i] + bear)
+                every.append(sp[i] + bear)
+                vals.append(sp[i])
             prev = i
 
         def mid(v):
             return sorted(v)[(len(v) - 1) // 2]
 
-        def f(a, b):
-            v = pair.get((a, b))
+        def f(a_, b_, bear=0.0):
+            v = pair.get((a_, b_))
             if v:
                 return max(v, key=v.count)
-            for v in (cls_pair.get((char_class(a), char_class(b))), cls_cur.get(char_class(b)), every):
+            for v in (cls_gap.get((char_class(a_), char_class(b_))), every):
                 if v:
-                    return mid(v)
+                    return float(math.floor(mid(v) - bear + 0.5))
             return 0.0
-        f.middle = mid(every) if every else 0.0
-        f.varied = len(set(every)) > 1
+        f.middle = mid(every) if every else 0.0          # 型の「すき間」のまん中の値 px
+        f.varied = len(set(vals)) > 1
         self._sp_plan = f
         return f
 
@@ -1700,6 +1716,7 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
         sp_rule = template.spacing_plan() if auto_style else None
         pos_mg = plan["common"] if auto_style else (100.0, 100.0)     # 位置で決まる倍率（まとまりの倍率）の、いまの値
         cur_run = 0
+        last_mg = (100.0, 100.0)                      # 直前の字の倍率（字間を決めるのに使う）
         if auto_style:
             t_runs = template.style_runs()
             run_of = {i: j for j, run in enumerate(t_runs) for i in run}
@@ -1757,7 +1774,10 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                     want_mg = auto_mag(i)
                 if i > 0 and codes[i - 1] not in (0x0A, newline_code) and c not in (0x0A, newline_code):
                     if not (same_at(i) and same_at(i - 1) and src_of[i - 1] == src_of[i] - 1):
-                        want_sp = sp_rule(codes[i - 1], c)
+                        bear = (glyph_abc(glyphs[index[codes[i - 1]]])[2] * last_mg[0]
+                                + glyph_abc(glyphs[index[c]])[0] * want_mg[0]) * template.char_size[0] / 100 / CELL
+                        want_sp = sp_rule(codes[i - 1], c, bear)
+                last_mg = want_mg
             if spacing is not None and i < len(spacing):
                 want_sp = float(spacing[i])
             if mags is not None and i < len(mags):

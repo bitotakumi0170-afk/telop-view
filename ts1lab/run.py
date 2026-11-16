@@ -916,7 +916,8 @@ def _retype_element(cfg, t, text, quiet=False):
     if hand and t2.text != t.text:
         from ts1core import char_class
         if sp_rule.varied:
-            notes.append(f"型は字ごとに字間を変えてあります。型にある字の組は同じ字間、ほかは型のまん中の値（{sp_rule.middle:g}px 前後）で組みました")
+            notes.append("型は字ごとに字間を変えてあります。型にある字の組は同じ字間、ほかは字と字のすき間が"
+                         f"型のまん中の値（{sp_rule.middle:.0f}px）になるように組みました")
         pm = mg_plan["particle"]
         if pm is not None and pm != mg_plan["uniform"].get("hira", mg_plan["common"]):
             p2 = t2.mag_plan()
