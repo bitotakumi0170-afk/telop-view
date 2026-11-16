@@ -197,6 +197,30 @@ def _explicit_style(t, ch):
     return tuple(sig), ch.pre_raw[18:22]
 
 
+def _run_style(t, index):
+    """index 番目の字に効いている書式（装飾・斜体・文字サイズ・書体・縦ずらし）。直前までの字から引き継いだ値も入れる。
+    字間と倍率は入れない（字の種類で決まる書式なので、文言が変われば変わる）"""
+    cur = {}
+    for ch in t.chars[:index + 1]:
+        for tag in ("ADCO", "ASLP", "ACSZ", "ACTP"):
+            if tag in ch.attrs:
+                cur[tag] = ch.attrs[tag]
+    sig = []
+    for tag in ("ADCO", "ASLP", "ACSZ", "ACTP"):
+        raw = cur.get(tag)
+        if tag == "ADCO" and raw is not None:
+            a = bytearray(raw)
+            colors = []
+            for d in t._decode_adco(raw):
+                c = d["color_resource"]
+                colors.append(_norm_res(*t.resources[c]) if 0 <= c < len(t.resources) and t.resources[c][0] != "RCHR" else ("?", c))
+                struct.pack_into("<I", a, d["offset"] + 4, 0)
+            sig.append((tag, bytes(a), tuple(colors)))
+        else:
+            sig.append((tag, raw))
+    return tuple(sig), t.chars[index].pre_raw[18:22]
+
+
 def local_trace(template, out, clear_history=False):
     """この PC で作業した記録が .ts1 に入っていないか → [(重さ, 説明)]。
     ユーザーの決まり（2026-11-14）: 型の編集履歴は残す。こちらの作業の記録（日時・ユーザー名・端末名）は足さない。
@@ -379,13 +403,13 @@ def check_retype(template, out, text=None, clear_history=False, plain_spacing=No
             if not (0 < a + b + c <= 2 * CELL):
                 msgs.append((NG, f"{name} の字幅が {a + b + c} です（マス目は {CELL}）"))
     # ---- 書式のまとまり
-    r0, r1 = t0.style_runs(), t1.style_runs()
+    r0, r1 = t0.style_runs(with_mag=False), t1.style_runs(with_mag=False)
     if len(r0) != len(r1):
         msgs.append((WARN if len(r1) < len(r0) else NG,
                      f"書式のまとまりの数が型と違います（型 {len(r0)} → {len(r1)}）。色や大きさの変わり目を確かめてください"))
     else:
         for j, (a, b) in enumerate(zip(r0, r1)):
-            if _explicit_style(t0, t0.chars[a[0]]) != _explicit_style(t1, t1.chars[b[0]]):
+            if _run_style(t0, a[0]) != _run_style(t1, b[0]):
                 msgs.append((NG, f"{j + 1} つめのまとまりの書式（装飾・大きさ・書体など）が型と違います"))
     # 終端の字: 型と同じ書式を持っているか（VWS は終端にも字間や倍率を書く）
     e0, e1 = t0.chars[-1], t1.chars[-1]

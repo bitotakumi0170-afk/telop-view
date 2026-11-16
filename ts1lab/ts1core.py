@@ -350,6 +350,63 @@ def encode_color(rgba, order=COLOR_ORDER):
     return bytes([r, g, b, a]) if order == "RGBA" else bytes([b, g, r, a])
 
 
+PARTICLES = frozenset(ord(c) for c in "のをでがはにとへもや")      # 助詞として小さくされることのあるひらがな
+
+
+def char_class(code):
+    """字の種類（字間・倍率の決まりを、同じ種類の字へ広げるのに使う）"""
+    if code in (0, 0x0A, 0x0D):
+        return "newline"
+    if code in (0x20, 0x3000, 0xE73E):
+        return "space"
+    if 0x3041 <= code <= 0x309F:
+        return "hira"
+    if 0x30A0 <= code <= 0x30FF or 0xFF66 <= code <= 0xFF9F:
+        return "kata"
+    if 0x4E00 <= code <= 0x9FFF or 0x3400 <= code <= 0x4DBF or code == 0x3005:
+        return "kanji"
+    if 0x30 <= code <= 0x39 or 0xFF10 <= code <= 0xFF19:
+        return "digit"
+    if 0x41 <= code <= 0x5A or 0xFF21 <= code <= 0xFF3A:
+        return "upper"
+    if 0x61 <= code <= 0x7A or 0xFF41 <= code <= 0xFF5A:
+        return "lower"
+    return "other"
+
+
+_TOKENIZER = None
+
+
+def particle_flags(text):
+    """文言の字ごとに「助詞か」→ [bool]。janome（日本語を単語に分ける部品）が入っていれば品詞で見分ける。
+    無ければ字の並びで決める:「を」は必ず助詞、ほかのひらがなは 漢字・カタカナ・英数・記号の直後（か、助詞の直後）なら助詞とみなす"""
+    global _TOKENIZER
+    flags = [False] * len(text)
+    try:
+        if _TOKENIZER is None:
+            from janome.tokenizer import Tokenizer
+            _TOKENIZER = Tokenizer()
+        pos = 0
+        for tok in _TOKENIZER.tokenize(text):
+            n = len(tok.surface)
+            if tok.part_of_speech.startswith("助詞"):
+                for k in range(pos, min(pos + n, len(text))):
+                    flags[k] = True
+            pos += n
+        if pos == len(text):
+            return flags
+    except Exception:
+        pass
+    flags = [False] * len(text)
+    for i, c in enumerate(text):
+        if c == "を":
+            flags[i] = True
+        elif i > 0 and char_class(ord(c)) == "hira" and (
+                char_class(ord(text[i - 1])) not in ("hira", "space", "newline") or flags[i - 1]):
+            flags[i] = True
+    return flags
+
+
 class Scale(float):
     """2048 単位 → px の倍率。float としては縦の倍率。横と縦が違うとき（長体・平体）は .sx / .sy"""
     def __new__(cls, sx, sy=None):
@@ -750,18 +807,104 @@ class TS1:
             self._hc = 1.0 if adv <= 0 or plain <= wfx + 1 else (wfx - gap) / adv
         return self._hc
 
-    def style_runs(self):
-        """書式のまとまり → [[字の番号, ...], ...]（終端は除く）。その字に効いている書式（装飾・倍率・斜体・文字サイズ・フォント・
-        縦ずらし）が直前の字と違う所で区切る。字間の違いでは区切らない（二色: 3 つ = [2 字][数字 2 字][2 字]。赤: 2 つ = [1 字目][残り]）"""
+    def mag_plan(self):
+        """型の倍率の付け方を読み取る。実物の型は、字の種類で倍率を変えてある（助詞の の・を・で だけ 85%、漢字 120% / かな 100% など）。
+        これは「何文字目か」ではなく字に付く書式なので、まとまり（style_runs）を分ける理由にしない。
+        → {"cls": {字の番号: 種類}, "uniform": {種類: 倍率}（その種類の字が全部同じ倍率のもの）, "particle": 助詞の倍率（無ければ None）,
+           "pcode": {助詞の文字コード: 倍率}, "explained": 種類で説明できる字の番号, "norm": 字ごとの「まとまりの倍率」}
+        種類 = char_class の値。ひらがなのうち、文の中で助詞として使われている の・を・で・が・は・に・と・へ・も・や は "particle"。
+        norm = 種類で説明できない字（同じ種類なのに倍率がばらばら = 位置で決めた強調）はその字の倍率、説明できる字は直前の説明できない字の値"""
+        if hasattr(self, "_mag_plan"):
+            return self._mag_plan
+        mg = self.magnifications()
+        vis = [i for i, ch in enumerate(self.chars) if ch.code]
+        text = "".join("\n" if self.chars[i].code in (0x0A, 0x0D) else self.chars[i].char for i in vis)
+        pf = particle_flags(text)
+        cls = {}
+        for n, i in enumerate(vis):
+            code = self.chars[i].code
+            c = char_class(code)
+            cls[i] = "particle" if c == "hira" and pf[n] and code in PARTICLES else c
+        by = {}
+        for i in vis:
+            if cls[i] != "newline":
+                by.setdefault(cls[i], []).append(mg[i])
+        uniform = {c: v[0] for c, v in by.items() if len(set(v)) == 1}
+        pm = by.get("particle")
+        particle = max(set(pm), key=pm.count) if pm else None
+        pcode = {}
+        for i in vis:
+            if cls[i] == "particle":
+                pcode.setdefault(self.chars[i].code, []).append(mg[i])
+        pcode = {k: max(set(v), key=v.count) for k, v in pcode.items()}
+        explained = {i for i in vis if cls[i] == "particle" or cls[i] in uniform or cls[i] == "newline"}
+        every = [mg[i] for i in vis if cls[i] != "newline"]
+        common = max(set(every), key=every.count) if every else (100.0, 100.0)
+        norm = list(mg)
+        un = [i for i in vis if i not in explained]
+        prev = mg[un[0]] if un else None      # 全部の字が種類で説明できる型は None（文言が変わっても同じ値になるように）
+        for i in vis:
+            if i in explained:
+                norm[i] = prev
+            else:
+                prev = mg[i]
+        self._mag_plan = {"cls": cls, "uniform": uniform, "particle": particle, "pcode": pcode, "explained": explained,
+                          "norm": norm, "common": common}
+        return self._mag_plan
+
+    def spacing_plan(self):
+        """型の字間の付け方を読み取る → 関数 f(前の字のコード, この字のコード) → 字間 px。
+        同じ字の組が型にあればその値（いくつもあれば一番多い値）。無ければ 同じ種類の字の組 → この字と同じ種類 → 全体、の順に
+        型のまん中の値（小さいほうの中央値）。手で詰めた型の雰囲気を、別の文言にも残すため"""
+        if hasattr(self, "_sp_plan"):
+            return self._sp_plan
+        sp = self.spacings()
+        pair, cls_pair, cls_cur, every = {}, {}, {}, []
+        prev = None
+        for i, ch in enumerate(self.chars):
+            if not ch.code or ch.code in (0x0A, 0x0D):
+                prev = None
+                continue
+            if prev is not None:
+                a, b = self.chars[prev].code, ch.code
+                pair.setdefault((a, b), []).append(sp[i])
+                cls_pair.setdefault((char_class(a), char_class(b)), []).append(sp[i])
+                cls_cur.setdefault(char_class(b), []).append(sp[i])
+                every.append(sp[i])
+            prev = i
+
+        def mid(v):
+            return sorted(v)[(len(v) - 1) // 2]
+
+        def f(a, b):
+            v = pair.get((a, b))
+            if v:
+                return max(v, key=v.count)
+            for v in (cls_pair.get((char_class(a), char_class(b))), cls_cur.get(char_class(b)), every):
+                if v:
+                    return mid(v)
+            return 0.0
+        f.middle = mid(every) if every else 0.0
+        f.varied = len(set(every)) > 1
+        self._sp_plan = f
+        return f
+
+    def style_runs(self, with_mag=True):
+        """with_mag=False なら倍率では区切らない（装飾・斜体・文字サイズ・書体・縦ずらしだけ）。
+        書式のまとまり → [[字の番号, ...], ...]（終端は除く）。その字に効いている書式（装飾・倍率・斜体・文字サイズ・フォント・
+        縦ずらし）が直前の字と違う所で区切る。字間の違いでは区切らない（二色: 3 つ = [2 字][数字 2 字][2 字]。赤: 2 つ = [1 字目][残り]）。
+        助詞だけ小さくしてある所（mag_plan の shrunk）では区切らない"""
         cur = {}
         runs, prev = [], None
+        norm = self.mag_plan()["norm"]
         for i, ch in enumerate(self.chars):
-            for tg in ("ADCO", "ACMG", "ASLP", "ACSZ", "ACTP"):
+            for tg in ("ADCO", "ASLP", "ACSZ", "ACTP"):
                 if tg in ch.attrs:
                     cur[tg] = ch.attrs[tg]
             if not ch.code:
                 continue
-            key = (tuple(cur.get(tg) for tg in ("ADCO", "ACMG", "ASLP", "ACSZ", "ACTP")), bytes(ch.pre_raw[18:22]))
+            key = (tuple(cur.get(tg) for tg in ("ADCO", "ASLP", "ACSZ", "ACTP")), norm[i] if with_mag else None,
+                   bytes(ch.pre_raw[18:22]))
             if key != prev:
                 runs.append([])
                 prev = key
@@ -1452,8 +1595,13 @@ class FontGlyphSource:
 
 def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                spacing=None, size=None, font_id=None, newline_code=0x0D, prefer_template=False, mags=None,
-               keep_style=None, segments=None):
+               keep_style=None, segments=None, auto_style=False):
     """テンプレートの書式で text を組み直し、(chars, glyphs) を返す。
+
+    - auto_style: True なら、字間と倍率を「何字目か」ではなく字で決める（装飾・斜体などは今までどおり まとまり / 何字目か）:
+        倍率 … 雛形のまとまりの倍率。雛形が助詞だけ小さくしていれば、新しい文言の助詞（漢字・カタカナなどの直後のひらがな）も同じ倍率
+        字間 … 雛形に同じ字の組があればその値、無ければ同じ種類の字の組のまん中の値（TS1.spacing_plan）
+      雛形と同じ位置に同じ字があれば、雛形の値をそのまま使う（同じ文言なら元と同じになる）
 
     - segments: 書式のまとまりごとに分けた文言のリスト（"".join(segments) == text）。雛形の style_runs() と同じ数。
       まとまり j の字は、雛形のまとまり j の字の属性を順に写す（雛形より長いぶんは直前の字の書式が続く）
@@ -1548,6 +1696,44 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
         else:
             src_of = [i if i < len(tmpl_chars) else None for i in range(len(text))]
             pre_of = [min(i, len(tmpl_chars) - 1) for i in range(len(text))]
+        plan = template.mag_plan() if auto_style else None
+        sp_rule = template.spacing_plan() if auto_style else None
+        pos_mg = plan["common"] if auto_style else (100.0, 100.0)     # 位置で決まる倍率（まとまりの倍率）の、いまの値
+        cur_run = 0
+        if auto_style:
+            t_runs = template.style_runs()
+            run_of = {i: j for j, run in enumerate(t_runs) for i in run}
+            is_particle = particle_flags(text)
+
+            def new_class(i):
+                c = codes[i]
+                k = char_class(c)
+                if k == "hira" and plan["particle"] is not None and c in PARTICLES and is_particle[i]:
+                    return "particle"
+                return k
+
+            def run_mag(j, k):
+                """雛形のまとまり j の中で、種類 k の字が全部同じ倍率ならその値。k = None は助詞を除く全部の字"""
+                v = [t_mg[i] for i in t_runs[j] if plan["cls"][i] not in ("particle", "newline")
+                     and (k is None or plan["cls"][i] == k)] if j < len(t_runs) else []
+                return v[0] if v and len(set(v)) == 1 else None
+
+        def same_at(i):
+            """新しい i 字目が、雛形の同じ位置の字と同じ字か"""
+            return 0 <= i < len(src_of) and src_of[i] is not None and template.chars[src_of[i]].code == codes[i]
+
+        def auto_mag(i):
+            """新しい i 字目の倍率: 雛形と同じ位置の同じ字 → 助詞 → まとまりの中の同じ種類 → まとまり全体 → 型全体の同じ種類 → 位置"""
+            if same_at(i):
+                return t_mg[src_of[i]]
+            k = new_class(i)
+            if k == "particle":
+                return plan["pcode"].get(codes[i], plan["particle"])
+            for m in (run_mag(cur_run, k), run_mag(cur_run, None), plan["uniform"].get(k)):
+                if m is not None:
+                    return m
+            return pos_mg
+
         for i, c in enumerate(codes):
             if c == 0:
                 if last is not None:
@@ -1563,6 +1749,15 @@ def build_text(template: TS1, text: str, font: FontGlyphSource | None = None,
                 attrs, order_t = {}, []
                 pre = template.chars[pre_of[i]].pre_raw if tmpl_chars else b"\x00" * 22
                 want_sp, want_mg = cur_sp, cur_mg
+            if auto_style:
+                if src_of[i] is not None:
+                    pos_mg = plan["norm"][src_of[i]] or plan["common"]
+                    cur_run = run_of.get(src_of[i], cur_run)
+                if c not in (0x0A, newline_code):
+                    want_mg = auto_mag(i)
+                if i > 0 and codes[i - 1] not in (0x0A, newline_code) and c not in (0x0A, newline_code):
+                    if not (same_at(i) and same_at(i - 1) and src_of[i - 1] == src_of[i] - 1):
+                        want_sp = sp_rule(codes[i - 1], c)
             if spacing is not None and i < len(spacing):
                 want_sp = float(spacing[i])
             if mags is not None and i < len(mags):

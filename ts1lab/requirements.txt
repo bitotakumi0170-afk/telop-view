@@ -2,3 +2,4 @@ psd-tools>=1.9
 fonttools>=4.40
 numpy
 Pillow
+janome

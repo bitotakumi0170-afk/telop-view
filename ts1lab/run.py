@@ -881,9 +881,17 @@ def _retype_element(cfg, t, text, quiet=False):
     elif need:
         raise RuntimeError(f"元の .ts1 に無い文字があり、フォント番号 {t.font_id} のフォントがこの PC に入っていません: {''.join(need)}"
                            "（そのフォントを PC に入れるか、元の .ts1 にある字だけで組んでください）")
-    # 普通の型は字間 0 で組み直す。装飾つきの型は、字間も「何文字目か」で元の値を引き継ぐ（二色の数字の −30・−68 など）
-    spacing = [0.0] * (len(text) + 1) if t.is_plain() else None
-    chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True, segments=segments)
+    # 字間と倍率の決め方（ユーザーの決定 2026-11-16「同じ字には同じ値」）:
+    #   手で字間・倍率を付けてある型、装飾つきの型 … 字で決める（同じ字の組は型と同じ字間、ほかは型のまん中の値。
+    #                                              型が助詞を小さくしていれば、新しい文言の助詞も同じ倍率）
+    #   字間が全部同じで助詞の縮小も無い、普通の型 … 今までどおり字間 0 で組み直す
+    sp_rule, mg_plan = t.spacing_plan(), t.mag_plan()
+    hand = sp_rule.varied or len(set(mg_plan["uniform"].values()) | ({mg_plan["particle"]} - {None})) > 1
+    if t.is_plain() and not hand:
+        chars, glyphs = build_text(t, text, font=font, spacing=[0.0] * (len(text) + 1), prefer_template=True, segments=segments)
+    else:
+        chars, glyphs = build_text(t, text, font=font, prefer_template=True, segments=segments,
+                                   keep_style=True, auto_style=True)
     out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
     out = _recount_colors(t, out)
     t2 = TS1(out, t.element)
@@ -904,11 +912,22 @@ def _retype_element(cfg, t, text, quiet=False):
             notes += ts1check.screen_overflow(t2.ofri_bbox, t.ofri_bbox)
     except Exception:
         pass
-    # ---- 普通の型で、型のほうが字ごとに字間を詰めてある（手詰め）とき: 新しい文言には持ち越さない
-    if t.is_plain():
-        sp = [v for k, v in enumerate(t.spacings()[1:], start=1) if t.chars[k].code]
-        if sp and any(abs(v - sp[0]) > 1e-6 for v in sp):
-            notes.append(f"型は字ごとに字間を変えてあります（{min(sp):g}〜{max(sp):g}px の手詰め）。打ち替えた文言は字間 0 で組んでいます")
+    # ---- 型が字ごとに字間・大きさを変えてある（手詰め）とき: どう組んだかを知らせる
+    if hand and t2.text != t.text:
+        from ts1core import char_class
+        if sp_rule.varied:
+            notes.append(f"型は字ごとに字間を変えてあります。型にある字の組は同じ字間、ほかは型のまん中の値（{sp_rule.middle:g}px 前後）で組みました")
+        pm = mg_plan["particle"]
+        if pm is not None and pm != mg_plan["uniform"].get("hira", mg_plan["common"]):
+            p2 = t2.mag_plan()
+            small = "".join(dict.fromkeys(ch.char for k, ch in enumerate(t2.chars) if p2["cls"].get(k) == "particle"))
+            notes.append(f"型は助詞を {pm[0]:g}% にしてあります。" +
+                         (f"この文言では「{'・'.join(small)}」を同じ大きさにしました" if small else "この文言には助詞がありません"))
+        names = {"kanji": "漢字", "hira": "ひらがな", "kata": "カタカナ", "digit": "数字", "upper": "英大文字", "lower": "英小文字"}
+        sizes = {names[k]: v for k, v in mg_plan["uniform"].items() if k in names}
+        if len(set(sizes.values())) > 1:
+            notes.append("型は字の種類で大きさを変えてあります（" + "・".join(
+                f"{k} {v[0]:g}%" + ("" if v[0] == v[1] else f"（縦 {v[1]:g}%）") for k, v in sizes.items()) + "）。この文言も同じ決まりで組みました")
     # 装飾つきの型の注意
     if not t.is_plain():
         per = t.decorations_per_char()
