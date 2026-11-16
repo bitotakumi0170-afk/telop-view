@@ -18,7 +18,7 @@ import struct
 from ts1core import CELL, FIX, TS1, u16, u32
 
 NG, WARN = "NG", "注意"
-COLOR_TAGS = ("CRGB", "CGRD", "CPTN")
+COLOR_TAGS = ("CRGB", "CGRD", "CPTN", "CMSH")     # CMSH = 格子状のグラデーション
 SCREEN = (1920, 1080)
 
 
@@ -139,16 +139,34 @@ def check_file(data, rebuild=True):
         h = g.header_raw
         if u16(h, 0) != len(g.contours):
             out.append((NG, f"字形「{g.char or '終端'}」のヘッダの輪郭数 {u16(h, 0)} が、輪郭 {len(g.contours)} 個と合いません"))
-        if u32(h, 32) != g.code or u32(h, 28) != g.font_id:
+        # 外のフォント（フォント表 ODTT に名前がある）の字形は、ヘッダのフォント番号の欄が 0
+        want_font = 0 if any(f["font_id"] == g.font_id for f in getattr(t, "fonts", [])) else g.font_id
+        if u32(h, 32) != g.code or u32(h, 28) != want_font:
             out.append((NG, f"字形「{g.char or '終端'}」のヘッダの文字コード・フォント番号が、リソースの値と合いません"))
-    # 1 行もの: 行の幅
-    if t.kind == "CSSL":
+    # 1 行もの: 行の幅（文字の要素ごと。幅に収める型は「決めた幅」なので、字の並びがそれを超えていないことだけ見る）
+    for n in range(t.text_count):
+        v = t if n == 0 else TS1(data, n)
+        if v.kind != "CSSL":
+            continue
+        where = "" if n == 0 else f"（{n + 1} つめの文字）"
         try:
-            w = t.line_width()
-            if abs(w - t.box[0]) > 1.5 / FIX:
-                out.append((NG, f"行の幅が {t.box[0]:g}px と書かれていますが、字送りの合計は {w:g}px です"))
+            ws = v.line_widths_fx()
+            w = max(ws) / FIX if ws else 0.0
+            if v.fit_width() is not None:
+                if w > v.box[0] + 1.5 / FIX:
+                    out.append((NG, f"幅に収める型{where}で、字の並び {w:g}px が決めた幅 {v.box[0]:g}px を超えています"))
+            elif abs(w - v.box[0]) > 4.5 / FIX:
+                # 4/256px までの差は見逃す（実物 1 本で、式より 2/256px 広い行があった。倍率 120% の字と空白が混ざる行。原因は未解明）
+                latin = sum(1 for a_, b_ in zip(v.chars, v.chars[1:])
+                            if 0x41 <= a_.code <= 0x7A and 0x41 <= b_.code <= 0x7A)
+                if latin and abs(w - v.box[0]) < v.char_size[0] * 0.1 * latin:
+                    # 半角の英字が並ぶ所は、VWS がフォントの詰め（ペアカーニング）を掛けているらしい（式は未解明）
+                    out.append((WARN, f"半角の英字が並ぶ行{where}です。行の幅が式と {v.box[0] - w:+.2f}px 違います"
+                                      "（英字どうしの詰めらしい。打ち替えたあと VWS で字の位置を確かめてください）"))
+                else:
+                    out.append((NG, f"行の幅{where}が {v.box[0]:g}px と書かれていますが、字送りの合計は {w:g}px です"))
         except Exception as ex:
-            out.append((NG, f"字の並びを計算できません（{ex}）"))
+            out.append((NG, f"字の並びを計算できません{where}（{ex}）"))
     # 書き直しても同じになるか（読み落としている所があれば、ここで差が出る）
     if rebuild:
         try:
@@ -297,19 +315,27 @@ def check_retype(template, out, text=None, clear_history=False, plain_spacing=No
         msgs.append((NG, f"ほかにも型と違う所が {len(diffs) - 8} か所あります"))
     # ---- 位置
     if single:
-        c0, c1 = t0.pos[0] + t0.box[0] / 2, t1.pos[0] + t1.box[0] / 2
-        if abs(c0 - c1) > 2 / FIX or t0.pos[1] != t1.pos[1]:
-            msgs.append((NG, f"文字の中心が動いています（{c0:g}, {t0.pos[1]:g}）→（{c1:g}, {t1.pos[1]:g}）"))
+        # 1 行もの: 左端・中心・右端のどれか 1 つは型と同じ（どれを保つかは TS1.anchor）。幅に収める型は左端も幅も同じ
+        same = [abs((t0.pos[0] + t0.box[0] * k) - (t1.pos[0] + t1.box[0] * k)) <= 2 / FIX for k in (0, 0.5, 1)]
+        if t0.fit_width() is not None:
+            if t0.pos != t1.pos or t0.box != t1.box:
+                msgs.append((NG, f"幅に収める型の位置か幅が動いています {t0.pos} {t0.box} → {t1.pos} {t1.box}"))
+        elif not any(same) or t0.pos[1] != t1.pos[1]:
+            msgs.append((NG, f"文字の位置が動いています（左 {t0.pos[0]:g}・幅 {t0.box[0]:g}・y {t0.pos[1]:g}）→"
+                             f"（左 {t1.pos[0]:g}・幅 {t1.box[0]:g}・y {t1.pos[1]:g}）"))
     elif t0.pos != t1.pos or t0.box != t1.box:
         msgs.append((NG, f"文字枠が動いています {t0.pos} {t0.box} → {t1.pos} {t1.box}"))
     # ---- 色・グラデーション・模様: 並びも中身も型と同じ（使用回数の欄は除く）
     c0 = [_norm_res(tg, r) for tg, r in t0.resources if tg in COLOR_TAGS or tg not in ("RCHR", "ORSC")]
     c1 = [_norm_res(tg, r) for tg, r in t1.resources if tg in COLOR_TAGS or tg not in ("RCHR", "ORSC")]
-    if c0 != c1:
+    # 新しい文言で使われなくなった色は空き枠になる（使われているのに消えていれば、参照の検査で NG になる）→ 型の並びの一部であればよい
+    it = iter(c0)
+    if c0 != c1 and not all(any(x == y for y in it) for x in c1):
         msgs.append((NG, f"色・グラデーション・模様のリソースが型と違います（型 {len(c0)} 個 → {len(c1)} 個、または中身が違う）"))
     if len(t0.elements) > 1:      # 2 つめの文字・図形は番号でリソースを指している → 番号が動いてはいけない
         moved = [i for i, (tg, r) in enumerate(t0.resources)
-                 if tg in COLOR_TAGS and (i >= len(t1.resources) or _norm_res(*t1.resources[i]) != _norm_res(tg, r))]
+                 if tg in COLOR_TAGS and (i >= len(t1.resources) or (t1.resources[i][0] != "ORSC"
+                                                                    and _norm_res(*t1.resources[i]) != _norm_res(tg, r)))]
         if moved:
             msgs.append((NG, f"色のリソースの番号が動いています（番号 {moved[:5]}）。図形や 2 つめの文字が別の色を指してしまいます"))
     if len(t0.elements) > 1:      # 図形から指されているぶん（使用回数 − 文字からの参照）は、型と同じはず

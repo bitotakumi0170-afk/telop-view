@@ -41,6 +41,8 @@ def load_config():
             with open(p, encoding="utf-8-sig") as f:
                 cfg = json.load(f)
             cfg["_dir"] = os.path.dirname(p)
+            # 1 行ものの文言が変わったときに動かさない所（"auto" / "left" / "center" / "right"）
+            TS1.one_line_anchor = cfg.get("one_line_anchor", "auto")
             return cfg
     return {"_dir": ROOT}
 
@@ -690,6 +692,39 @@ def _on_figure(bb, f):
     return l <= cx <= r_ and tp <= cy <= b_
 
 
+def _recount_colors(t0, out):
+    """打ち替えのあと、色（単色・グラデーション・模様・格子）の使用回数を数え直す。使われなくなった色は空き枠にする。
+    要素が 1 つの型は字の装飾から数え直す。要素が複数の型は番号が動かないので、この要素の増減ぶんだけ直す
+    （図形など、ほかから指されているぶんは型の値のまま）"""
+    import struct
+    import ts1check
+    from ts1core import ORSC_EMPTY, u16
+
+    def refs(v):
+        n = {}
+        for ch in v.chars:
+            if "ADCO" in ch.attrs:
+                for d in v._decode_adco(ch.attrs["ADCO"]):
+                    n[d["color_resource"]] = n.get(d["color_resource"], 0) + 1
+        return n
+
+    t1 = TS1(out, t0.element)
+    r1 = refs(t1)
+    res, changed = list(t1.resources), False
+    single = len(t0.elements) == 1
+    r0 = {} if single else refs(t0)
+    for i, (tag, r) in enumerate(res):
+        if tag not in ts1check.COLOR_TAGS:
+            continue
+        have = u16(r, 10)
+        want = r1.get(i, 0) if single else have - r0.get(i, 0) + r1.get(i, 0)
+        if want == have:
+            continue
+        res[i] = (tag, r[:10] + struct.pack("<H", want) + r[12:]) if want > 0 else ("ORSC", ORSC_EMPTY)
+        changed = True
+    return t1.rebuild_resources(res) if changed else out
+
+
 def _stretch_figures(before, after, k):
     """k 番目の文字を打ち替えた前後（before → after）で、その文字が乗っている図形（座布団）を文言に合わせて伸ばす。
     左右の余白（図形の端から字の端まで）を型と同じに保つ。同じ図形にほかの文字も乗っていれば、全部が収まる幅にする。
@@ -718,6 +753,10 @@ def _stretch_figures(before, after, k):
                 others.append(ob)
         l0, r0 = min([bb0[0]] + [o[0] for o in others]), max([bb0[2]] + [o[2] for o in others])
         l1, r1 = min([bb1[0]] + [o[0] for o in others]), max([bb1[2]] + [o[2] for o in others])
+        # 座布団 = 字の左右にぴったり付いている図形。画面いっぱいの帯のように、字よりずっと広い図形は伸ばさない
+        snug = 1.5 * max(t0.char_size[0], 1)
+        if l0 - f["x"] > snug or f["x"] + f["w"] - r0 > snug:
+            continue
         left = round(f["x"] + (l1 - l0))                       # 図形の端は整数の画素に置く（型もそうなっている）
         right = round(f["x"] + f["w"] + (r1 - r0))
         if left == round(f["x"]) and right == round(f["x"] + f["w"]):
@@ -846,6 +885,7 @@ def _retype_element(cfg, t, text, quiet=False):
     spacing = [0.0] * (len(text) + 1) if t.is_plain() else None
     chars, glyphs = build_text(t, text, font=font, spacing=spacing, prefer_template=True, segments=segments)
     out = t.rebuild(chars=chars, glyphs=glyphs, clear_history=cfg.get("clear_history", False))
+    out = _recount_colors(t, out)
     t2 = TS1(out, t.element)
     # ---- 納品前の検査: 壊れていないか、文字のほかの所が型と変わっていないか。NG なら .ts1 を出さない
     import ts1check
@@ -882,9 +922,11 @@ def _retype_element(cfg, t, text, quiet=False):
             now = "|".join("".join(t.chars[i].char for i in run) for run in runs)
             notes.append(f"色や大きさが途中で変わる型です（元の区切り: {now}）。区切りを書かなかったので、変わり目は元と同じ「何文字目か」になります。"
                          f"文字数が違う文言（{n_old} → {n_new} 文字）では狙いとずれるので、「{now}」のように | で区切って書いてください")
-        if t.h_condense() != 1.0:
-            notes.append("字を横に縮める型です（金・縞と同じ設定）。縮める倍率は金・縞の書体で測った値なので、"
-                         "ほかの書体の型では打ち替えたあと VWS で字の位置を確かめてください")
+        if t2.fit_width() is not None:
+            f_ = t2.h_condense()
+            notes.append(f"幅に収める型です（幅 {t2.box[0]:.0f}px）。" + (
+                f"この文言は収まらないので、字が横 {f_ * 100:.0f}% に縮みます" + ("（かなり細くなります）" if f_ < 0.6 else "")
+                if f_ != 1.0 else "この文言は幅に収まるので縮みません"))
         notes.append("装飾つきの型です。確認画像の装飾は近似なので、最初の 1 回は VWS で見てください")
     return out, notes
 
@@ -960,6 +1002,11 @@ def _type_memo(t):
             memo.append("色や大きさが途中で変わる。区切りを | で書く（元: " + "|".join("".join(t.chars[i].char for i in run) for run in runs) + "）")
     if t.text_count > 1:
         memo.append(f"文字が {t.text_count} つある。{ELEM_SEP} で区切って書く（変えない所は空でよい）")
+    fits = [(j, v.box[0]) for j, v in ((j, t if j == t.element else TS1(t.data, j)) for j in range(t.text_count))
+            if v.fit_width() is not None]
+    if fits:
+        memo.append("幅に収める型（長い文言は字が横に縮む）: " + "・".join(
+            (f"{j + 1} つめ " if t.text_count > 1 else "") + f"幅 {w:.0f}px" for j, w in fits))
     figs = t.figures()
     if figs:
         on = [f for f in figs if any(_on_figure(_ink(TS1(t.data, j)), f) for j in range(t.text_count))]
@@ -1074,7 +1121,8 @@ def catalog(cfg, folder):
             "memo": _type_memo(t).split(" / 色や大きさが途中で変わる")[0], "split": split, "size": f"{t.char_size[0]:g}",
             "multi": len(t.elements) > 1,
             "font": f"{font_name}（番号 {t.font_id}）", "can_new": can_new, "chars": chars,
-            "condense": t.h_condense() != 1.0, "no_half": no_half,
+            "condense": any((t if j == t.element else TS1(t.data, j)).fit_width() is not None for j in range(t.text_count)),
+            "no_half": no_half,
             "check_ng": " / ".join(m for lv, m in found if lv == ts1check.NG),
         })
         print(f"  OK  {rel}（{how}）")
@@ -1116,7 +1164,7 @@ def catalog(cfg, folder):
         if c["split"]:
             tags.append('<span class="tag warn">途中で色や大きさが変わる</span>')
         if c["condense"]:
-            tags.append('<span class="tag">字を横に縮める型</span>')
+            tags.append('<span class="tag">幅に収める型</span>')
         if c["no_half"]:
             tags.append('<span class="tag warn">半角の英数字は足せない（全角で書く）</span>')
         if c["check_ng"]:

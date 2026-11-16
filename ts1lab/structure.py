@@ -63,6 +63,7 @@ SCHEMA = {
     "CRGB": [("ver", "u16", ""), ("type", "u32", "使用回数（この色を指している装飾の数。以前「色種別」と読んでいた）"), ("color", "rgba", "R G B A")],
     "CGRD": [("ver", "u16", ""), ("usage", "u16", "使用回数"), ("zero", "b6", ""), ("count", "u8", "色の数 n。続けて 色 4 バイト × n、位置 u8 × n、[WPF1 模様の画像]、末尾")],
     "CPTN": [("ver", "u16", ""), ("usage", "u16", "使用回数"), ("zero", "b6", "続けて WPF4 模様の画像、末尾")],
+    "CMSH": [("ver", "u16", ""), ("usage", "u16", "使用回数"), ("zero", "b6", ""), ("cols", "u8", "格子の横の点の数"), ("rows", "u8", "格子の縦の点の数。続けて 色 4 バイト × (横 × 縦)")],
     "ORSC": [("ver", "u16", ""), ("value", "u32", "不明 (0)")],
     "VIDT": [],
     "MSCR": [("ver", "u16", ""), ("value", "b8", "不明 (0)。1 行もの（CSSL）のファイルにだけある")],
@@ -108,6 +109,8 @@ class Dumper:
             if o >= end:
                 break
             n, v = _read(self.b, o, fmt)
+            if o + n > end:          # 同じタグでも短い版がある（RBID: 文字の要素の中では 14 バイト）
+                n, v = end - o, None
             o = self.add(path, o, n, name, v, note)
         if o < end:
             o = self.add(path, o, end - o, "rest", None, "未解明")
@@ -291,10 +294,18 @@ class Dumper:
         """図形の要素が、読める形（図形 1 つ・MFIG が要素の末尾まで）か"""
         b = self.b
         size = struct.unpack_from("<I", b, o + 4)[0]
-        m = b.find(b"MFIG", o, o + size)
-        return (m > 0 and b[m - 10:m - 6] == b"ESET" and struct.unpack_from("<H", b, m - 2)[0] == 1
-                and m + struct.unpack_from("<I", b, m + 4)[0] == o + size and b[m + 34:m + 38] == b"DAAR"
-                and b.find(b"SCLS", o, m) > 0)
+        m = self._cgrp_item(o)
+        return (m > 0 and b[m:m + 4] in (b"MFIG", b"MPIC", b"MRAS", b"MVCT", b"MSTK")
+                and struct.unpack_from("<H", b, m - 2)[0] == 1
+                and m + struct.unpack_from("<I", b, m + 4)[0] == o + size and b[m + 34:m + 38] == b"DAAR")
+
+    def _cgrp_item(self, o):
+        """図形の要素の中身（MFIG など）の位置。SCLS のあとの ESET の次"""
+        b = self.b
+        size = struct.unpack_from("<I", b, o + 4)[0]
+        q = b.find(b"SCLS", o, o + size)
+        e = b.find(b"ESET", q, o + size) if q > 0 else -1
+        return e + 10 if e > 0 else -1
 
     def cgrp(self, path, o):
         """図形の要素。文字の要素と同じ並び（位置・トランジション…・SCLS）のあとに、図形 MFIG が 1 つ"""
@@ -304,7 +315,7 @@ class Dumper:
         p = self.fields(path, o + 8, o + 26, [("ver", "u16", ""), ("x", "fx", "図形の左 px"), ("y", "fx", "図形の下端 px"),
                                                ("a", "i32", "不明 (-1)"), ("b", "u16", "不明 (0)"), ("c", "u16", "不明 (1)")])
         counts = {}
-        m = b.find(b"MFIG", o, end)
+        m = self._cgrp_item(o)
         while p < m - 10:
             t = b[p:p + 4].decode("latin1")
             k = counts.get(t, 0)
@@ -319,9 +330,10 @@ class Dumper:
             else:
                 p = self.simple(cp, p)
         p, _n = self.eset(path + "/figs", p)
-        fp = f"{path}/MFIG[0]"
+        fp = f"{path}/MFIG[0]"        # 画像（MPIC・MRAS）・絵（MVCT）・線（MSTK）も同じ名前で並べる（頭の並びが同じ）
         self.hdr(fp, m)
-        p = self.fields(fp, m + 8, m + 34, [("ver", "u16", ""), ("a", "i32", "不明 (-1)"), ("zero", "u32", ""),
+        p = self.fields(fp, m + 8, m + 34, [("ver", "u16", ""), ("a", "i32", "画像・絵のリソース番号（四角・線は -1）"),
+                                             ("zero", "u32", "フラグ（0x100000 = 左右反転らしい）"),
                                              ("w", "fx", "図形の幅 px"), ("h", "fx", "図形の高さ px"), ("zero2", "b8", "")])
         _, ds = self.hdr(fp + "/DAAR", p)
         n = struct.unpack_from("<H", b, p + 10)[0]
@@ -333,8 +345,11 @@ class Dumper:
         p += ds
         self.add(fp, p, 4, "(tag)", b[p:p + 4].decode("latin1"))
         p += 4
-        if end - p >= 28:
-            p = self.fields(fp, p, p + 28, [("zero3", "b20", ""), ("p1", "fx", "不明（10.0。角の丸み?）"), ("p2", "u32", "不明（26。形の種類?）")])
+        if b[m:m + 4] == b"MFIG" and end - p >= 26:
+            p = self.fields(fp, p, p + 26, [("shape", "u32", "形の種類（0 = 四角。2・0x20 もある）"), ("zero3", "b8", ""),
+                                             ("radius", "fx", "角の丸み px（0 = 角ばった四角）"), ("zero4", "b4", ""),
+                                             ("p1", "fx", "不明（10.0 か 0。40 にしても見た目は変わらない）"),
+                                             ("p2", "u16", "このあとの中身の長さ（26 か 42。自分を含む。変えると VWS が開けない）")])
         if p < end:
             self.add(fp, p, end - p, "tail", None, "未解明")
         return end

@@ -122,7 +122,7 @@ class Glyph:
         return CELL
 
     def advance_fx_condensed(self, size_px, f):
-        """横に縮める型での字送り（1/256px の整数）= floor((A + B + C) × k × f)。A・B・C を別々に切り捨てない
+        """幅に収める型で字が縮んでいるときの字送り（1/256px の整数）= floor((A + B + C) × k × f)。A・B・C を別々に切り捨てない
         （金の 8 字: 1 字あたり 34468 = floor(38400 × 0.897626)。行の幅 274464 とちょうど合う）"""
         h = self.header_raw
         a_, b_, c_ = struct.unpack_from("<iii", h, 44) if h and len(h) >= 56 else (0, 0, 0)
@@ -174,6 +174,9 @@ class Glyph:
             return self.rchr_raw
         data = self.encode_contours()
         hdr = self.header_raw if (keep_header and self.header_raw) else self.build_header()
+        if self.font_id > 0xFFFF and len(hdr) >= 32:
+            # フォント表（ODTT）で名前を持つ外のフォント（番号が大きい）の字形は、ヘッダのフォント番号の欄が 0（VWS の実物 4 本）
+            hdr = hdr[:28] + bytes(4) + hdr[32:]
         wv = b"WVCT" + struct.pack("<II", 4 + len(hdr) + len(data), len(data)) + hdr + data
         head = struct.pack("<HHHI", 1, self.usage, 0, self.font_id) + b"\x00" * 4 + struct.pack("<I", self.code)
         body = head + wv
@@ -691,20 +694,61 @@ class TS1:
             out.append(cur)
         return out
 
-    # 横に縮める型（SCLS の 1 バイト目が 0x10）での横の倍率。金（サイズ 150・8 字）と縞（サイズ 230・3 字）の行の幅と、
-    # 金の文字面の PNG（91611 画素中 58 画素の差）から 0.897622〜0.897630。値はファイルの中には無い
-    # （フォント 1453 だけで確かめた。フォントごとに違う値かどうかは未確認）
-    CONDENSE = 0.897626
+    # 幅に収める型（SCLS の 1 バイト目に 0x10）: CSTR の幅は「決めた幅」で、文言が長くて収まらないときだけ字が横に縮む。
+    # 倍率は決まった値ではない（以前は金・縞の 2 本から 0.8976 の決まった値だと考えていた。h_condense を見ること）
+    CONDENSE = 0.897626     # 古い値。使っていない（外の実験用スクリプトが参照するので残す）
 
     def scls_mode(self):
-        """SCLS の 1 バイト目（0・2・4・6・0x10 を確認。0x10 = 字を横に縮める型）"""
+        """SCLS の 1 バイト目（0・1・2・4・6・0x10・0x12 を確認）。0x10 のビット = 幅に収める型。
+        下のビットは揃え: 幅に収める型で文言が短いとき、0 は枠の左、2 は枠の中央に置かれる（実物の PNG で確認。4・6・1 は未確認）"""
         b = self.data
         q = b.find(b"SCLS", self.off["CSML"], self.off["ESET_chars"])
         return b[q + 8] if q >= 0 else 0
 
+    # 1 行もの（幅に収める型でないもの）の文言が変わったとき、どこを動かさないか: "left" / "center" / "right" / "auto"。
+    # auto = 型の行が画面の中央（960）にあれば中央、そうでなければ左端を保つ。
+    # 実物のサンプルは、文言の長さが違っても左端が同じ値（67 など）にそろっている型が大半だった
+    one_line_anchor = "auto"
+    SCREEN_W = 1920
+
+    def anchor(self):
+        """1 行ものの打ち替えで動かさない所 → "left" / "center" / "right" """
+        a = self.one_line_anchor
+        if a in ("left", "center", "right"):
+            return a
+        return "center" if abs(self.pos[0] + self.box[0] / 2 - self.SCREEN_W / 2) <= 1.0 else "left"
+
+    def fit_width(self):
+        """幅に収める型（SCLS の 1 バイト目に 0x10）なら、決めてある幅（px。CSTR の幅）。普通の型は None"""
+        return self.box[0] if self.kind == "CSSL" and self.scls_mode() & 0x10 else None
+
+    def natural_width_fx(self):
+        """縮める前の (字送りの合計, 字間の合計)（1/256px。字送りは切り捨てない実数）"""
+        size_w = self.char_size[0]
+        adv, gap, n = 0.0, 0, 0
+        for ch, s_, m_ in zip(self.chars, self.spacings(), self.magnifications()):
+            if ch.code in (0, 0x0A, 0x0D):
+                continue
+            adv += self.glyph_at(ch.glyph_index).advance_units() * size_w * m_[0] / 100 * FIX / CELL
+            gap += int(math.floor(s_ * FIX)) if n else 0
+            n += 1
+        return adv, gap
+
     def h_condense(self):
-        """字の横の倍率（普通は 1.0。横に縮める型は CONDENSE）。字形の横幅と字送りの両方に掛かる。字間は縮めない"""
-        return self.CONDENSE if self.scls_mode() & 0x10 else 1.0
+        """字の横の倍率（普通は 1.0）。幅に収める型で、素の行の幅が決めた幅を超えるときだけ
+        (決めた幅 − 字間の合計) ÷ 字送りの合計 に縮む。字形の横幅と字送りの両方に掛かる。字間は縮めない"""
+        w = self.fit_width()
+        if w is None:
+            return 1.0
+        if not hasattr(self, "_hc"):
+            adv, gap = self.natural_width_fx()
+            wfx = int(round(w * FIX))
+            # 縮めずに組んだ行の幅（字送りを 1/256px に切り捨てて足した、普通の型と同じ値）が決めた幅に収まれば縮まない
+            size_w = self.char_size[0]
+            plain = gap + sum(self.glyph_at(ch.glyph_index).advance_fx(size_w * m_[0] / 100)
+                              for ch, m_ in zip(self.chars, self.magnifications()) if ch.code not in (0, 0x0A, 0x0D))
+            self._hc = 1.0 if adv <= 0 or plain <= wfx + 1 else (wfx - gap) / adv
+        return self._hc
 
     def style_runs(self):
         """書式のまとまり → [[字の番号, ...], ...]（終端は除く）。その字に効いている書式（装飾・倍率・斜体・文字サイズ・フォント・
@@ -776,6 +820,10 @@ class TS1:
         pitch = size_h + self.line_spacing
         widths = [sum(c[4] for c in line) + sum(c[2] for c in line[1:]) if line else 0 for line in lines]
         start = x0 if self.kind == "CSSL" else x0 + (bw - max(widths)) // 2
+        if self.fit_width() is not None and hc == 1.0 and widths and bw > widths[0]:
+            # 幅に収める型で文言が短いとき: 枠の中での揃え（0 = 左、2 = 中央。4 = 右は推定）
+            al = self.scls_mode() & 6
+            start = x0 + ((bw - widths[0]) // 2 if al == 2 else (bw - widths[0]) if al == 4 else 0)
         out = []
         for li, line in enumerate(lines):
             x = start
@@ -838,6 +886,8 @@ class TS1:
     def line_width(self):
         """1 行もの（CSSL）の CSTR に入る行の幅 (px) = 字送りの合計 + 2 字目以降の字間（1/256px の整数で足したもの）
         （VWS が保存した 5 本で一致: 150 × 3 + 1 + 4 = 455 から、字送りの切り捨てで 4/256 減って 454.984375）"""
+        if self.fit_width() is not None:
+            return self.box[0]          # 幅に収める型: 幅は「決めた幅」のまま（文言で変わらない）
         w = self.line_widths_fx()
         return max(w) / FIX if w else 0.0
 
@@ -987,7 +1037,7 @@ class TS1:
                     res.append(("RCHR", Glyph(r.code, r.font_id, n, r.contours, r.ascent, r.descent, r.header_raw, None, r.tag)))
                 else:
                     res.append((t, r))
-            elif t in ("CRGB", "CGRD", "CPTN"):
+            elif t in ("CRGB", "CGRD", "CPTN", "CMSH"):
                 n = cref.get(i, 0)
                 res.append((t, r[:10] + struct.pack("<H", n) + r[12:]) if n else ("ORSC", ORSC_EMPTY))
             else:
@@ -1019,25 +1069,39 @@ class TS1:
             end = o + s
             f = {"index": i, "offset": o, "size": s, "x": i32(b, o + 10) / FIX, "y": i32(b, o + 14) / FIX,
                  "simple": False, "decorations": []}
-            m = b.find(b"MFIG", o, end)
-            e = b.rfind(b"ESET", o, m) if m > 0 else -1
+            q = b.find(b"SCLS", o, end)
+            e = b.find(b"ESET", q, end) if q > 0 else -1
             n = u16(b, e + 8) if e > 0 else 0
+            m = e + 10
             f["count"] = n
-            if m > 0 and n == 1 and e + 10 == m and m + u32(b, m + 4) == end and b[m + 34:m + 38] == b"DAAR":
+            kind = bytes(b[m:m + 4]).decode("latin1") if e > 0 else ""
+            # 中身の種類: MFIG = 四角（角丸もある） / MPIC・MRAS = 画像 / MVCT = ベクトルの絵 / MSTK = 線。頭の並びは共通:
+            #   u16 版, i32 リソース番号（画像・絵。無ければ −1）, u32 フラグ（0x100000 = 左右反転らしい）, 幅, 高さ, 8 バイト 0, DAAR, EMTR, 尾
+            if n == 1 and kind in ("MFIG", "MPIC", "MRAS", "MVCT", "MSTK") and m + u32(b, m + 4) == end \
+                    and b[m + 34:m + 38] == b"DAAR":
+                f["kind"] = kind
+                f["resource"], f["flags"] = i32(b, m + 10), u32(b, m + 14)
                 f["w"], f["h"] = i32(b, m + 18) / FIX, i32(b, m + 22) / FIX
                 f["w_off"], f["h_off"] = m + 18, m + 22
-                f["rect"] = (f["x"], f["y"] - f["h"], f["x"] + f["w"], f["y"])
+                if kind != "MSTK":             # 線は幅・高さの意味が違う（範囲は分からない）
+                    f["rect"] = (f["x"], f["y"] - f["h"], f["x"] + f["w"], f["y"])
                 a = b.find(b"ADCO", m, end)
                 if a > 0:
                     try:
                         f["decorations"] = self._decode_adco(b[a + 8:a + u32(b, a + 4)], order)
                     except Exception:
                         f["decorations"] = []
-                em = b.find(b"EMTR", m + 34, end)
-                if em > 0 and em + 32 <= end:
-                    f["p1"], f["p2"] = i32(b, em + 24) / FIX, u32(b, em + 28)
-                    f["p1_off"], f["p2_off"] = em + 24, em + 28
-                f["simple"] = f["w"] > 0 and f["h"] > 0
+                em = m + 34 + u32(b, m + 38)          # DAAR のあと = EMTR
+                tail = end - em - 4
+                if kind == "MFIG" and b[em:em + 4] == b"EMTR":
+                    # 尾: u32 形の種類（0 = 四角。2・0x20 もある）, 8 バイト, 24.8 角の丸み（0 = 角ばった四角）, 4 バイト, 24.8 の値（10.0 か 0）,
+                    #     [u16 長さ（26 か 42。自分を含む）, その長さぶんの中身]。長さの欄を 25 にすると VWS は「不正なブロック長」で開けない（第 6 回の 115）
+                    f["shape"] = u32(b, em + 4) if tail >= 4 else 0
+                    f["radius"] = i32(b, em + 16) / FIX if tail >= 16 else 0.0
+                    if tail >= 28:
+                        f["p1"], f["p2"] = i32(b, em + 24) / FIX, u16(b, em + 28)
+                        f["p1_off"], f["p2_off"] = em + 24, em + 28
+                    f["simple"] = f["w"] > 0 and f["h"] > 0      # 幅を変えられる（四角・角丸）
             out.append(f)
         return out
 
@@ -1123,14 +1187,16 @@ class TS1:
 
     def _finish_rebuild(self, out, changed, args, pos_in, edge_width, _line_w):
         # ---- 1 行もの: 文言が変わったら行の幅と左位置を書き直す（中心は動かさない）
-        #      横に縮める型は式と保存値が 1/256px 違うことがある（縞）ので、その差は変えたうちに入れない
-        tol = 1.5 / FIX if self.h_condense() != 1.0 else 1e-6
-        if self.kind == "CSSL" and _line_w is None and changed:
+        #      幅に収める型は幅も左位置も変えない（決めた幅のまま）
+        tol = 1e-6
+        if self.kind == "CSSL" and _line_w is None and changed and self.fit_width() is None:
             tmp = TS1(bytes(out), self.element)
             w = tmp.line_width()
             if abs(w - self.box[0]) > tol:
                 left, base = pos_in if pos_in is not None else self.pos
-                return self.rebuild(pos=(left + self.box[0] / 2 - w / 2, base), _line_w=w, **args)
+                a = self.anchor()
+                new_left = left if a == "left" else left + self.box[0] - w if a == "right" else left + self.box[0] / 2 - w / 2
+                return self.rebuild(pos=(new_left, base), _line_w=w, **args)
 
         # ---- OFRI 描画範囲の更新
         if changed:

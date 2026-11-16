@@ -190,6 +190,24 @@ def texture_positions(ts1, index, shape, info):
 # ---------------------------------------------------------------------------
 # 層の形
 # ---------------------------------------------------------------------------
+def _line_steps(w, w2, rounding=False):
+    """(0, 0) から (w, w2) までを 1px ずつ進む点の並び（立体・影の伸びる道筋）。長いほうの向きに 1px ずつ進み、
+    短いほうは切り捨て（太さ 8・太さ 2 が 6 の影: 下へのずれは 0, 1, 2, 3, 3, 4, 5, 6 = 断面の濃さとぴったり合う）。
+    立体の斜め（太さ 10・太さ 2 が 3）は切り捨てでも四捨五入でも 1% ほど合わない（四捨五入のほうが近い。段の付き方は未解明）"""
+    n = max(abs(w), abs(w2))
+    if rounding:
+        return [(int(math.floor(i * w / n + 0.5)), int(math.floor(i * w2 / n + 0.5))) for i in range(1, n + 1)]
+    return [(i * w // n, i * w2 // n) for i in range(1, n + 1)]
+
+
+def _crop_box(k, pad):
+    ys, xs = np.nonzero(k)
+    if not len(ys):
+        return None
+    h, w = k.shape
+    return max(int(ys.min()) - pad, 0), min(int(ys.max()) + 1 + pad, h), max(int(xs.min()) - pad, 0), min(int(xs.max()) + 1 + pad, w)
+
+
 def layer_shape(d, F, U):
     """層 1 つの形 → (重ねる前の量 k, ぼかしたアルファ)。F = 文字面の量、U = 上の層を合わせた量（縁の土台）"""
     kind, w, w2, e = d["kind"], d["width_px"], d.get("width2_px", d["width_px"]), d["extra"]
@@ -201,31 +219,54 @@ def layer_shape(d, F, U):
     elif kind == 4:
         k = dilate_square(base, w) if w > 0 else base.copy()
     elif kind == 3:
-        # 仮: 右下へ 1 段ずつずらしたものを重ねる（立体）
+        # 立体: 太さぶん右へ・太さ 2 ぶん下へ、1px ずつずらしたものを重ねる（第 6 回の 81〜84。縁ははっきりしていて、ぼかさない）
         k = base.copy()
-        sx, sy = PARAMS["extrude_step"]
-        n = _pv(PARAMS["extrude_len"], w, w2, e)
-        for i in range(1, n + 1):
-            np.maximum(k, shift(base, i * sx, i * sy), out=k)
-        e = max(e, _pv(PARAMS["extrude_blur"], w, w2, e))
+        for dx, dy in (_line_steps(w, w2, rounding=True) if (w or w2) else []):
+            np.maximum(k, shift(base, dx, dy), out=k)
     elif kind in (16, 1):
-        # 仮: 右下へずらしてぼかす（影）
-        s = _pv(PARAMS["shadow_shift"], w, w2, e)
-        k = shift(base, s, s)
-        e = max(e, _pv(PARAMS["shadow_blur"], w, w2, e))
+        # 影（種別 16）: 立体と同じ道筋で伸びるが、先へ行くほど薄くなる。n = max(太さ, 太さ 2) として
+        # i 段目の濃さ = (n + 1 − i) / (n + 1)（第 6 回の 85〜87: 太さ 8 で 227・198・170・…・28）
+        k = base.copy()
+        a = np.zeros(base.shape, np.int64)          # ずらす前の形そのものは入らない
+        steps = _line_steps(w, w2) if (w or w2) else []
+        n = len(steps)
+        for i, (dx, dy) in enumerate(steps, start=1):
+            s = shift(base, dx, dy)
+            np.maximum(k, s, out=k)
+            np.maximum(a, (alpha_of(s) * (n + 1 - i)) // (n + 1), out=a)
+        if e > 0:
+            a = box_blur(a, e)
+        return k, np.minimum(a, 255)
     elif kind == 0x800:
-        # 仮: 光彩 = 上の層を広げてぼかす
-        g = _pv_signed(PARAMS["glow_grow"], w, w2, e)
-        k = dilate_round(base, g) if g > 0 else (erode(base, VR.edge_offsets(-g)) if g < 0 else base.copy())
-        a = alpha_of(k)
-        r = _pv(PARAMS["glow_blur"], w, w2, e)
-        for _ in range(PARAMS["glow_passes"] if r > 0 else 0):
-            a = box_blur(a, r)
+        # 光彩（第 6 回の 92〜94 の断面から）:
+        #   太さ > 0 … 半径 = 太さ の箱型でぼかす（太さ 5: 縁で 50%、5.5px 先で 0）
+        #   太さ < 0 … 0〜|太さ| px 広げたものの平均（外へ |太さ|/2 ずれた、幅 |太さ| の箱型と同じ）
+        #   追加（ぼかし）… さらに半径 = 追加 の箱型でぼかす
+        box = _crop_box(base, abs(w) + e + 3)
+        k = base.copy()
+        if box is None:
+            return k, alpha_of(k)
+        y0, y1, x0, x1 = box
+        sub = base[y0:y1, x0:x1]
+        if w < 0:
+            acc = np.zeros(sub.shape, np.int64)
+            for t in range(0, -w + 1):
+                acc += alpha_of(dilate_round(sub, t))
+            a_sub = acc // (-w + 1)
+        else:
+            a_sub = alpha_of(sub)
+            if w > 0:
+                a_sub = box_blur(a_sub, w)
+        if e > 0:
+            a_sub = box_blur(a_sub, e)
+        a = np.zeros(base.shape, np.int64)
+        a[y0:y1, x0:x1] = a_sub
         return k, np.minimum(a, 255)
     else:
         k = base.copy()
     a = alpha_of(k)
-    if e > 0:
+    if e > 0 and kind != 0x801:
+        # 面 0x801 の追加（ぼかし）は形をぼかさない（第 6 回の 95: 輪郭ははっきりしたまま、右下の内側の暗い線だけが柔らかくなる）
         a = box_blur(a, e)
     return k, np.minimum(a, 255)
 
@@ -321,6 +362,16 @@ def _render_figure(ts1, f, canvas=CANVAS, order=COLOR_ORDER):
     if x1 <= x0 or y1 <= y0:
         return out, []
     F[y0:y1, x0:x1] = 128
+    rad = int(round(min(f.get("radius") or 0.0, f["w"] / 2, f["h"] / 2)))
+    if rad > 0:                       # 角丸: 4 つの角を円で切る（VWS の実物は角が丸い。丸め方の細かい式は未確認）
+        yy, xx = np.mgrid[0:rad, 0:rad]
+        cut = (rad - xx - 0.5) ** 2 + (rad - yy - 0.5) ** 2 > rad * rad
+        for cy, cx, fy, fx_ in ((int(round(tp)), int(round(l)), 1, 1), (int(round(tp)), int(round(r_)) - rad, 1, -1),
+                                (int(round(b_)) - rad, int(round(l)), -1, 1), (int(round(b_)) - rad, int(round(r_)) - rad, -1, -1)):
+            c = cut[::fy, ::fx_]
+            ya, yb, xa, xb = max(cy, 0), min(cy + rad, H), max(cx, 0), min(cx + rad, W)
+            if yb > ya and xb > xa:
+                F[ya:yb, xa:xb][c[ya - cy:yb - cy, xa - cx:xb - cx]] = 0
     info = {"origins": [(l, f["w"], f["h"])], "baseline": f["y"], "shear": 0.0, "ink_top": y0, "ink_bottom": y1,
             "left": l, "em_top": f["y"] - f["h"], "size": f["h"]}
     rgb = np.zeros((H, W, 3), np.int64)

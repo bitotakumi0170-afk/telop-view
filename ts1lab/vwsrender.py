@@ -198,6 +198,8 @@ def face_counts(ts1, canvas=(1920, 1080)):
     W, H = canvas
     kf = np.zeros((H, W), np.int32)
     extra = _char_extras(ts1)
+    # 幅に収める型で、実際に字が縮んでいるときだけ縦が 3 ラインの平均になる
+    # （第 6 回の 106: 設定だけ入れて幅は足りている → 縮まず、普通の型と 1 画素も違わない）
     smooth3 = bool(getattr(ts1, "h_condense", lambda: 1.0)() != 1.0)
     for ch, g, x_fx, y, sc in layout_fx(ts1):
         if not g.contours:
@@ -220,7 +222,7 @@ def face_counts(ts1, canvas=(1920, 1080)):
         k = m.copy()
         k[:-1] += m[1:]                                                    # 上下 2 ライン
         if smooth3:
-            # 横に縮める型（金・縞）: 縦が 3 ラインの平均 (m[y−1] + 2 m[y] + m[y+1]) / 2 になる = 2 ライン足しをもう 1 回。
+            # 幅に収める型: 縦が 3 ラインの平均 (m[y−1] + 2 m[y] + m[y+1]) / 2 になる = 2 ライン足しをもう 1 回。
             # アルファは k[y−1] + k[y]。ここでは 0〜128 の量に直す（奇数のとき切り上げ → アルファが 1 だけ大きくなることがある）
             k2 = k.copy()
             k2[1:] += k[:-1]
